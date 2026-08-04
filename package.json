@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/genspark-ai/hermesoffice.git"
+    "url": "git+https://github.com/criptogus/HermesOffice.git"
   },
   "workspaces": [
     "apps/*",

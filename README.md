@@ -5,7 +5,7 @@ planilha, apresentações e PDF — cinco apps Electron compartilhando uma
 camada de engines, construída em torno de edição por IA como fluxo de
 primeira classe, não um chat acoplado.
 
-> **Fork de [genspark-ai/hermesoffice](https://github.com/genspark-ai/hermesoffice)**
+> **Fork de [genspark-ai/genoffice](https://github.com/genspark-ai/genoffice)**
 > (Apache-2.0). Este é um *thin fork*: o código de engines e apps segue o
 > upstream, com uma camada própria de identidade e integração com o
 > **Hermes Agent** (Nous Research) como IA nativa.
@@ -13,7 +13,7 @@ primeira classe, não um chat acoplado.
 ## Download
 
 Releases assinados do fork serão publicados aqui (em construção — use o
-[HermesOffice upstream](https://github.com/genspark-ai/hermesoffice/releases) ou
+[GenOffice upstream](https://github.com/genspark-ai/genoffice/releases) ou
 compile local com `npm run dist:mac`).
 
 ## Apps
@@ -110,7 +110,7 @@ exceção: o diretório `ee/` é reservado para futuros módulos enterprise e é
 coberto pela [HermesOffice Enterprise License](ee/LICENSE).
 
 **Atribuição**: este projeto é um fork de
-[genspark-ai/hermesoffice](https://github.com/genspark-ai/hermesoffice) (Apache-2.0,
+[genspark-ai/genoffice](https://github.com/genspark-ai/genoffice) (Apache-2.0,
 Copyright Mainfunc, Inc.), mantendo o [NOTICE](NOTICE) original. Os nomes e
 logos HermesOffice e Genspark são trademarks da Mainfunc, Inc. e não são usados
 por este fork — que adota branding próprio, conforme a licença.
