@@ -13,6 +13,8 @@ export const PDF_CHANNELS = {
   closeSaveResult: 'pdf:close-save-result',
   getLanguage: 'app:get-language',
   languageChanged: 'app:language-changed',
+  // Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat)
+  openPath: 'pdf:open-path',
 } as const
 
 export type MarkupType = 'highlight' | 'underline' | 'strikeout'
@@ -155,6 +157,8 @@ export interface PdfApi {
   exportImages(request: ExportImagesRequest): Promise<ExportImagesResult>
   /** Mirror unsaved-changes state to the main process; drives the save prompt before closing a tab/window */
   setDirty(dirty: boolean): void
+  /** Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat) */
+  openPath(path: string): Promise<boolean>
   /** Main process picked "Save" in the close prompt → renderer saves and replies via sendCloseSaveResult */
   onCloseSaveRequest(handler: () => void): () => void
   sendCloseSaveResult(ok: boolean): void

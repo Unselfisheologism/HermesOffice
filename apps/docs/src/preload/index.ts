@@ -31,6 +31,8 @@ const api: DesktopApi = {
     ipcRenderer.on('docx:external-change', listener)
     return () => ipcRenderer.removeListener('docx:external-change', listener)
   },
+  // Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat)
+  openPath: (path: string) => ipcRenderer.invoke('app:open-path', path),
   onOpenDocx: (handler) => {
     const listener = (_event: IpcRendererEvent, result: Parameters<typeof handler>[0]) =>
       handler(result)

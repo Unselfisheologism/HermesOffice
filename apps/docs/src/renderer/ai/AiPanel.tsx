@@ -18,7 +18,17 @@ import { createFilesSkill } from './files-skill'
 import { createElectronTransport } from './transport'
 import { useI18n, t as tModule, aiLangDirective, type StringKey } from '../i18n/locale'
 
-// Fork: convenções do agente Hermes — invocação de skills e relatórios de documentos
+// Fork: converte caminhos de arquivo na resposta em links clicáveis (abrem no app)
+const FILE_PATH_RE =
+  /(?<![(\[])((?:\/Users\/|\/tmp\/|\/Volumes\/|file:\/\/)[^\s`'">\]\)]*?\.(?:docx|pdf|pptx|xlsx|doc|ppt|xls|md))/gi
+function linkifyPaths(text: string): string {
+  return text.replace(FILE_PATH_RE, (m) => {
+    const clean = m.replace(/^file:\/\//, '')
+    const name = clean.split('/').pop() ?? clean
+    return `[${name}](${clean})`
+  })
+}
+
 const HERMES_COMMANDS = `
 # Hermes commands
 - Skill invocation: when the user writes /<skill-name> or @<skill-name> (e.g. /board-intelligence), load that skill with skill_view (use skills_list to find it when the name is approximate) and follow its instructions for the current task. Prefer the exact match; resolve ambiguity with the closest available skill.
@@ -357,6 +367,8 @@ export function AiPanel({
           () => editorRef.current,
           numIds,
           () => (trackChangesRef.current ? { author: AI_REVISION_AUTHOR } : undefined),
+          // Fork: caminho do doc aberto — edição via MCP + auto-reload
+          () => filePath ?? '',
         ),
         createFilesSkill(() => attachmentsRef.current),
       ]),
@@ -734,7 +746,12 @@ export function AiPanel({
             {historicChat.map((entry, i) => (
               <div key={`h${i}`} className={`ai-msg ai-msg-${entry.role} ai-msg-historic`}>
                 {entry.tools && entry.tools.length > 0 && <ToolChipList tools={entry.tools} />}
-                {entry.text && <Markdown text={entry.text} />}
+                {entry.text && (
+                  <Markdown
+                    text={linkifyPaths(entry.text)}
+                    onLinkClick={(url) => void window.desktop.openPath(url)}
+                  />
+                )}
               </div>
             ))}
             <div className="ai-history-sep">{t('aiHistorySep')}</div>
@@ -798,7 +815,10 @@ export function AiPanel({
                   />
                 </span>
               ) : entry.role === 'assistant' ? (
-                <Markdown text={entry.text} />
+                <Markdown
+                  text={linkifyPaths(entry.text)}
+                  onLinkClick={(url) => void window.desktop.openPath(url)}
+                />
               ) : (
                 entry.text
               )}

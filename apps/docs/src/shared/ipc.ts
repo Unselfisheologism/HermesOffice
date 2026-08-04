@@ -153,6 +153,8 @@ export interface DesktopApi {
   /** Fork: vigia o arquivo aberto; dispara quando ele muda por fora (agente Hermes) */
   trackDocxFile(path: string): Promise<void>
   onDocxExternalChange(handler: (path: string) => void): () => void
+  /** Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat) */
+  openPath(path: string): Promise<boolean>
   saveDocx(path: string, data: ArrayBuffer): Promise<{ ok: boolean; error?: string }>
   /** crash-recovery copy of a dirty document, stored under userData */
   writeRecoveryCopy(path: string, data: ArrayBuffer): Promise<{ ok: boolean }>

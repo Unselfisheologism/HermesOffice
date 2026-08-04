@@ -2317,6 +2317,12 @@ const activeAiStreams = new Map<string, AbortController>()
  */
 export function registerAiIpc(): void {
   registerDocxTrackIpc()
+  // Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat)
+  ipcMain.handle('app:open-path', (_event, path: unknown) => {
+    if (typeof path !== 'string' || !path) return false
+    void shell.openPath(path)
+    return true
+  })
   ipcMain.handle('ai:get-settings', (): AiSettings => {
     const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(SETTINGS_PATH(), {})
     const settings = resolveAiSettings(stored, defaultAiSettings())

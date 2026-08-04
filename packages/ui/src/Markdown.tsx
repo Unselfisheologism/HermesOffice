@@ -2,13 +2,14 @@ import { Fragment, type ReactNode } from 'react'
 
 /**
  * Minimal dependency-free markdown for chat bubbles: paragraphs, ul/ol,
- * headings, **bold**, *italic*, `inline code`. Tolerates
- * partial (streaming) input — anything unrecognized renders as plain text.
+ * headings, **bold**, *italic*, `inline code`, and links `[label](url)`.
+ * Tolerates partial (streaming) input — anything unrecognized renders as
+ * plain text.
  */
 
-const INLINE_RE = /(`[^`\n]+`|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g
+const INLINE_RE = /(`[^`\n]+`|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*|\[[^\]\n]+\]\([^)\n]+\))/g
 
-function renderInline(text: string): ReactNode[] {
+function renderInline(text: string, onLinkClick?: (url: string) => void): ReactNode[] {
   const out: ReactNode[] = []
   let last = 0
   let key = 0
@@ -18,7 +19,26 @@ function renderInline(text: string): ReactNode[] {
     const tok = m[0] ?? ''
     if (tok.startsWith('`')) out.push(<code key={key++}>{tok.slice(1, -1)}</code>)
     else if (tok.startsWith('**')) out.push(<strong key={key++}>{tok.slice(2, -2)}</strong>)
-    else out.push(<em key={key++}>{tok.slice(1, -1)}</em>)
+    else if (tok.startsWith('*')) out.push(<em key={key++}>{tok.slice(1, -1)}</em>)
+    else {
+      // [label](url) — clicável; onLinkClick decide o que fazer (ex: abrir arquivo)
+      const m2 = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok)
+      const label = m2?.[1] ?? tok
+      const url = m2?.[2] ?? ''
+      out.push(
+        <a
+          key={key++}
+          className="ai-md-link"
+          href="#"
+          onClick={(e) => {
+            e.preventDefault()
+            onLinkClick?.(url)
+          }}
+        >
+          {label}
+        </a>,
+      )
+    }
     last = i + tok.length
   }
   if (last < text.length) out.push(text.slice(last))
@@ -80,19 +100,27 @@ function parseBlocks(text: string): MdBlock[] {
   return blocks
 }
 
-export function Markdown({ text }: { text: string }): React.JSX.Element {
+export interface MarkdownProps {
+  text: string
+  /** Invoked when the user clicks a [label](url) link; caller decides what to do */
+  onLinkClick?: (url: string) => void
+}
+
+export function Markdown({ text, onLinkClick }: MarkdownProps): React.JSX.Element {
   return (
     <div className="ai-md">
       {parseBlocks(text).map((b, i) => {
         if (b.kind === 'h') {
           return (
             <p key={i} className="ai-md-h">
-              {renderInline(b.text)}
+              {renderInline(b.text, onLinkClick)}
             </p>
           )
         }
         if (b.kind === 'ul' || b.kind === 'ol') {
-          const items = b.items.map((it, j) => <li key={j}>{renderInline(it)}</li>)
+          const items = b.items.map((it, j) => (
+            <li key={j}>{renderInline(it, onLinkClick)}</li>
+          ))
           return b.kind === 'ul' ? <ul key={i}>{items}</ul> : <ol key={i}>{items}</ol>
         }
         return (
@@ -100,7 +128,7 @@ export function Markdown({ text }: { text: string }): React.JSX.Element {
             {b.lines.map((ln, j) => (
               <Fragment key={j}>
                 {j > 0 && <br />}
-                {renderInline(ln)}
+                {renderInline(ln, onLinkClick)}
               </Fragment>
             ))}
           </p>

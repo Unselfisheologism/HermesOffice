@@ -6,6 +6,17 @@ import { AiComposer, AiTypingIndicator } from '@hermesoffice/ui'
 import { aiLangDirective, t as tGlobal, useI18n } from '../i18n/locale'
 import { Markdown } from '@hermesoffice/ui'
 
+// Fork: converte caminhos de arquivo na resposta em links clicáveis (abrem no app)
+const FILE_PATH_RE =
+  /(?<![(\[])((?:\/Users\/|\/tmp\/|\/Volumes\/|file:\/\/)[^\s`'">\]\)]*?\.(?:docx|pdf|pptx|xlsx|doc|ppt|xls|md))/gi
+function linkifyPaths(text: string): string {
+  return text.replace(FILE_PATH_RE, (m) => {
+    const clean = m.replace(/^file:\/\//, '')
+    const name = clean.split('/').pop() ?? clean
+    return `[${name}](${clean})`
+  })
+}
+
 // Fork: convenções do agente Hermes — invocação de skills e relatórios de documentos
 const HERMES_COMMANDS = `
 # Hermes commands
@@ -328,7 +339,12 @@ export function AiPanel({
               className={`ai-msg ai-msg-assistant${entry.isError ? ' ai-msg-error' : ''}`}
             >
               {hasTools && <ToolChipList tools={entry.tools!} />}
-              {entry.text && <Markdown text={entry.text} />}
+              {entry.text && (
+                <Markdown
+                  text={linkifyPaths(entry.text)}
+                  onLinkClick={(url) => void window.pdfApi.openPath(url)}
+                />
+              )}
             </div>
           )
         })}

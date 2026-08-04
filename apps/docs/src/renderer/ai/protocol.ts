@@ -409,13 +409,15 @@ function clip(text: string, max: number): string {
  * Per-turn context: fresh document skeleton + selection fragment injected
  * as a selection chip.
  */
-export function buildDocContext(editor: Editor): string {
+export function buildDocContext(editor: Editor, filePath?: string): string {
   const isEmptyDoc = editor.state.doc.textContent.trim() === ''
   const scope = getSelectionScope(editor)
   const selectionHtml = scope.isRange
     ? clip(serializeRangeToHtml(editor, scope.startIndex, scope.endIndex), SELECTION_MAX_CHARS)
     : ''
   return [
+    // Fork: caminho do arquivo aberto — o agente usa p/ editar via MCP (patch)
+    filePath ? `Document file path: ${filePath}` : '',
     isEmptyDoc
       ? 'The document is currently blank.'
       : `Document block list:\n${buildDocumentContext(editor)}`,

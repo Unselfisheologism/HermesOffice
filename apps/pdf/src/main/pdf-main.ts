@@ -326,6 +326,13 @@ function registerPdfIpc(): void {
     return path
   })
 
+  // Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat)
+  ipcMain.handle(PDF_CHANNELS.openPath, (_e, path: unknown) => {
+    if (typeof path !== 'string' || !path) return false
+    void shell.openPath(path)
+    return true
+  })
+
   ipcMain.handle(PDF_CHANNELS.readFile, async (e, path: unknown) => {
     if (typeof path !== 'string' || !allowedByWc.get(e.sender.id)?.has(path)) {
       throw new Error('pdf: path not granted to this view')

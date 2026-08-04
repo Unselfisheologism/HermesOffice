@@ -11,6 +11,7 @@ const api: PdfApi = {
   extractPages: (request) => ipcRenderer.invoke(PDF_CHANNELS.extractPages, request),
   insertPdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.insertPdf, request),
   exportImages: (request) => ipcRenderer.invoke(PDF_CHANNELS.exportImages, request),
+  openPath: (path) => ipcRenderer.invoke(PDF_CHANNELS.openPath, path),
   setDirty: (dirty) => ipcRenderer.send(PDF_CHANNELS.dirtyChanged, dirty),
   onCloseSaveRequest: (handler) => {
     const listener = () => handler()
