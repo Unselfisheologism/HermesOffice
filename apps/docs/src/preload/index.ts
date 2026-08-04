@@ -24,6 +24,13 @@ const api: DesktopApi = {
   openDocxPath: (path: string) => ipcRenderer.invoke('docs:open-path', path),
   consumePendingOpenDocx: () => ipcRenderer.invoke('docs:consume-pending-open'),
   consumeNewBlankDoc: () => ipcRenderer.invoke('docs:consume-new-blank'),
+  // Fork: vigia o arquivo aberto p/ auto-reload quando o agente edita por fora
+  trackDocxFile: (path: string) => ipcRenderer.invoke('docx:track-file', path),
+  onDocxExternalChange: (handler: (path: string) => void) => {
+    const listener = (_event: IpcRendererEvent, path: string) => handler(path)
+    ipcRenderer.on('docx:external-change', listener)
+    return () => ipcRenderer.removeListener('docx:external-change', listener)
+  },
   onOpenDocx: (handler) => {
     const listener = (_event: IpcRendererEvent, result: Parameters<typeof handler>[0]) =>
       handler(result)

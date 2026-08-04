@@ -56,6 +56,10 @@ import { checkMissingFonts, collectDocFonts } from './font-check'
 import { defaultEastAsiaFontFor } from './font-list'
 import { hasPrintableHeaderFooter } from './pagination'
 
+/** Fork: guard anti-loop do auto-reload externo — o renderer marca o momento
+ * do último save; mudanças no disco dentro da margem são do próprio app. */
+export const externalChangeGuard = { lastSaveAt: 0 }
+
 /** The App state the file actions need; built fresh per call. */
 export interface FileActionContext {
   editor: Editor | null
@@ -511,6 +515,9 @@ export async function save(
         return false
       }
     }
+    // Fork: marca o momento do save — o auto-reload externo ignora eventos
+    // do próprio app (o save também toca o arquivo no disco)
+    externalChangeGuard.lastSaveAt = Date.now()
     if (editor.state.doc !== docSnapshot) {
       // The user kept editing while the save was in flight. Replacing the
       // editor content with the reparsed (pre-edit) snapshot would silently

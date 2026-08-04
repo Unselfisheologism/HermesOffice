@@ -12,9 +12,11 @@ import {
   readFileSync,
   statSync,
   unlinkSync,
+  watch,
   writeFileSync,
+  type FSWatcher,
 } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { BrowserWindow, Menu, WebContentsView, app, dialog, ipcMain, shell } from 'electron'
 import {
   fetchWithSsrfGuard,
@@ -2264,6 +2266,48 @@ const TWIPS_PER_INCH = 1440
 
 const SETTINGS_PATH = () => userDataPath('ai-settings.json')
 
+// ── Auto-reload externo (fork) ──────────────────────────────────────────
+// O agente Hermes pode editar o arquivo por fora (engines headless via MCP).
+// O renderer registra o path aberto; o main vigia o arquivo e emite
+// 'docx:external-change' quando ele muda por fora. O guard anti-loop (o
+// próprio save do app também toca o arquivo) fica no renderer, que conhece
+// o momento exato de cada save.
+const trackedDocx: {
+  watcher: FSWatcher | null
+  wc: Electron.WebContents | null
+  path: string
+  debounceTimer: NodeJS.Timeout | null
+} = { watcher: null, wc: null, path: '', debounceTimer: null }
+
+function stopTrackingDocx(): void {
+  trackedDocx.watcher?.close()
+  trackedDocx.watcher = null
+  trackedDocx.wc = null
+  trackedDocx.path = ''
+  if (trackedDocx.debounceTimer) clearTimeout(trackedDocx.debounceTimer)
+  trackedDocx.debounceTimer = null
+}
+
+function registerDocxTrackIpc(): void {
+  ipcMain.handle('docx:track-file', (event, path?: string) => {
+    stopTrackingDocx()
+    if (!path || !existsSync(path)) return
+    const dir = dirname(path)
+    const base = basename(path)
+    trackedDocx.path = path
+    trackedDocx.wc = event.sender
+    trackedDocx.watcher = watch(dir, (_ev, filename) => {
+      if (filename !== base) return
+      // debounce: agrupa rajadas (saves atômicos, múltiplos eventos do FS)
+      if (trackedDocx.debounceTimer) return
+      trackedDocx.debounceTimer = setTimeout(() => {
+        trackedDocx.debounceTimer = null
+        trackedDocx.wc?.send('docx:external-change', trackedDocx.path)
+      }, 400)
+    })
+  })
+}
+
 const activeAiStreams = new Map<string, AbortController>()
 
 /**
@@ -2272,6 +2316,7 @@ const activeAiStreams = new Map<string, AbortController>()
  * sheets' standalone AI handlers use the same channel names.
  */
 export function registerAiIpc(): void {
+  registerDocxTrackIpc()
   ipcMain.handle('ai:get-settings', (): AiSettings => {
     const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(SETTINGS_PATH(), {})
     const settings = resolveAiSettings(stored, defaultAiSettings())

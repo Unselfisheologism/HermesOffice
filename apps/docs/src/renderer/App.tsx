@@ -117,6 +117,7 @@ import {
   newFile as newFileImpl,
   save as saveImpl,
   writeRecoveryCopy as writeRecoveryCopyImpl,
+  externalChangeGuard,
   type FileActionContext,
 } from './file-actions'
 import {
@@ -833,6 +834,29 @@ export function App() {
     // (newFile is declared after this effect in source order).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, loadFile])
+
+  // Fork: auto-reload externo — o agente Hermes pode editar o arquivo por fora
+  // (engines headless via MCP). O main vigia o arquivo e emite; aqui o renderer
+  // recarrega do disco, ignorando eventos do próprio save (guard no save).
+  useEffect(() => {
+    const path = doc?.filePath
+    void window.desktop.trackDocxFile(path ?? '')
+    return () => {
+      void window.desktop.trackDocxFile('')
+    }
+  }, [doc?.filePath])
+
+  useEffect(() => {
+    const path = doc?.filePath
+    if (!path) return
+    return window.desktop.onDocxExternalChange((changedPath) => {
+      if (changedPath !== path) return
+      if (Date.now() - externalChangeGuard.lastSaveAt < 1000) return
+      void window.desktop.openDocxPath(path).then((result) => {
+        if (result) loadFile(result)
+      })
+    })
+  }, [doc?.filePath, loadFile])
 
   const openFile = useCallback(async () => {
     await loadFile(await window.desktop.openDocx())

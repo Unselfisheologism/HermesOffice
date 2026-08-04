@@ -150,6 +150,9 @@ export interface DesktopApi {
   onOpenDocx(handler: (result: OpenFileResult) => void): () => void
   /** File was renamed externally (renamed in the shell Home list) — pushes old and new paths; renderer syncs its save path and title bar */
   onRenamedDocx(handler: (paths: { oldPath: string; newPath: string }) => void): () => void
+  /** Fork: vigia o arquivo aberto; dispara quando ele muda por fora (agente Hermes) */
+  trackDocxFile(path: string): Promise<void>
+  onDocxExternalChange(handler: (path: string) => void): () => void
   saveDocx(path: string, data: ArrayBuffer): Promise<{ ok: boolean; error?: string }>
   /** crash-recovery copy of a dirty document, stored under userData */
   writeRecoveryCopy(path: string, data: ArrayBuffer): Promise<{ ok: boolean }>
