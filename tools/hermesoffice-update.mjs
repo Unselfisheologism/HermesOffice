@@ -140,7 +140,12 @@ function cmdInstall() {
   run('codesign', ['--force', '--deep', '--sign', '-', APP_PATH], { timeout: 120_000 })
 
   progress(100, 'relaunching')
-  spawnSync('open', ['-n', APP_PATH], { stdio: 'ignore' })
+  // This helper itself runs through the packaged Electron binary with
+  // ELECTRON_RUN_AS_NODE=1. Never leak that flag into LaunchServices: the
+  // relaunched GUI would start in Node mode instead of normal Electron mode.
+  const relaunchEnv = { ...process.env }
+  delete relaunchEnv.ELECTRON_RUN_AS_NODE
+  spawnSync('open', ['-n', APP_PATH], { stdio: 'ignore', env: relaunchEnv })
   console.log(`RESULT ${JSON.stringify({ installed: APP_PATH, commit: builtCommit(APP_PATH) })}`)
 }
 
