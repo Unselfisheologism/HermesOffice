@@ -62,6 +62,8 @@ export interface AiStreamRequest {
   messages: AgentMessage[]
   tools?: AgentToolDef[]
   maxTokens?: number
+  /** stable per-document conversation id; sent as X-Hermes-Session-Id for gateway session continuity */
+  sessionId?: string
 }
 
 export interface AiStreamChunk {

@@ -2382,7 +2382,7 @@ export function registerAiIpc(): void {
         signal: controller.signal,
         onDelta: (text) => send({ requestId, type: 'delta', text }),
         onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
-      })
+      }, request.sessionId)
       send({ requestId, type: 'done' })
     } catch (err) {
       if (controller.signal.aborted) {

@@ -362,6 +362,11 @@ export function AiPanel({
       transport: createElectronTransport(() => settingsRef.current),
       systemSuffix: () => aiLangDirective() + HERMES_COMMANDS,
       maxTurns: DOCS_AGENT_MAX_TURNS,
+      // Fork: stable per-document session id (project-store chatId = sha256 of file path).
+      // Sent as X-Hermes-Session-Id → the Hermes gateway keeps ONE session per document,
+      // so follow-up questions continue the same conversation instead of opening a new thread
+      // and re-reading the document from scratch.
+      sessionId: () => chatRefIds.current?.chatId,
       skill: composeSkills('docs+files', '', [
         createDocsSkill(
           () => editorRef.current,

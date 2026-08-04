@@ -361,6 +361,7 @@ export async function streamOpenAiCompatible(
   tools: AgentToolDef[],
   maxTokens: number,
   cb: StreamCallbacks,
+  sessionId?: string,
 ): Promise<void> {
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
@@ -368,6 +369,9 @@ export async function streamOpenAiCompatible(
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
+      // Hermes gateway session continuity: stable per-document conversation id so
+      // each question continues the same Hermes session instead of starting a new one.
+      ...(sessionId ? { 'X-Hermes-Session-Id': sessionId } : {}),
     },
     body: JSON.stringify({
       model: config.model,
@@ -450,6 +454,7 @@ export async function streamForProvider(
   tools: AgentToolDef[],
   maxTokens: number,
   cb: StreamCallbacks,
+  sessionId?: string,
 ): Promise<void> {
   switch (provider) {
     case 'hermes':
@@ -464,6 +469,7 @@ export async function streamForProvider(
         tools,
         maxTokens,
         cb,
+        sessionId,
       )
     case 'genspark':
       // The proxy exposes three protocol-specific endpoints; route by model id prefix: claude uses
