@@ -14,6 +14,9 @@ electron-builder.env
 /scripts/drivers/driver.*.mjs
 /probe*.mjs
 /apps/shell/build/THIRD-PARTY-NOTICES.txt
+# generated at build time with the local HEAD commit (never version it — it
+# always diverges from origin/main the moment a new commit lands)
+/apps/shell/build/build-info.json
 /example/
 /.task/
 /docs-archive/

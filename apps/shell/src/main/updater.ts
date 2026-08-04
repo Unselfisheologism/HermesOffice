@@ -263,7 +263,7 @@ function log(...args: unknown[]): void {
   console.log('[updater]', ...args)
 }
 
-function uiStrings(): UpdateUiStrings {
+export function uiStrings(): UpdateUiStrings {
   const lang = getUiLang()
   return {
     title: tUpd(lang, 'updTitle'),
@@ -278,7 +278,7 @@ function uiStrings(): UpdateUiStrings {
   }
 }
 
-function initialState(version: string): UpdateUiState {
+export function initialState(version: string): UpdateUiState {
   return {
     phase: 'available',
     version,

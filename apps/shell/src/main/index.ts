@@ -100,6 +100,7 @@ import { TABS_CHANNELS } from '../shared/tabs-api'
 import { normalizeRecentQuery, pageRecentPaths, statExistingPaths } from './recent-files'
 import { TabManager } from './tab-manager'
 import { initAutoUpdater } from './updater'
+import { initMainUpdater } from './main-updater'
 
 /**
  * HermesOffice unified shell: ONE Electron app, ONE BrowserWindow, hosting the
@@ -1694,6 +1695,7 @@ app.whenReady().then(() => {
   installBackToHomeItems()
   installDockMenu()
   initAutoUpdater(() => shellWindow)
+  initMainUpdater(() => shellWindow)
 
   if (!pendingLaunchPath || !openDocumentPath(pendingLaunchPath)) tabManager?.openHomeTab()
   pendingLaunchPath = null

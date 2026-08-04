@@ -50,6 +50,10 @@ const config = {
       to: 'THIRD-PARTY-NOTICES.txt',
     },
     {
+      from: 'build/build-info.json',
+      to: 'build-info.json',
+    },
+    {
       from: '../../node_modules/electron/dist/LICENSES.chromium.html',
       to: 'LICENSES.chromium.html',
     },
