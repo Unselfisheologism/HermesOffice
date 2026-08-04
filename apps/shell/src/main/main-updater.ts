@@ -89,6 +89,9 @@ function spawnHelper(args: string[], onProgress: (pct: number, stage: string | n
     const child = spawn(process.execPath, [helperScript(), ...args], {
       env: {
         ...process.env,
+        // packaged Electron: execPath is the HermesOffice binary — this flag
+        // makes it run the helper as a plain Node process (no GUI, no lock)
+        ELECTRON_RUN_AS_NODE: '1',
         HERMESOFFICE_SOURCE_DIR: sourceDir(),
         HERMESOFFICE_REPO: REPO_URL,
       },
@@ -170,7 +173,12 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
       // detach: the helper waits for this process to exit, swaps the bundle
       // and relaunches via `open -n`
       const child = spawn(process.execPath, [helperScript(), 'install'], {
-        env: { ...process.env, HERMESOFFICE_SOURCE_DIR: sourceDir(), HERMESOFFICE_REPO: REPO_URL },
+        env: {
+          ...process.env,
+          ELECTRON_RUN_AS_NODE: '1',
+          HERMESOFFICE_SOURCE_DIR: sourceDir(),
+          HERMESOFFICE_REPO: REPO_URL,
+        },
         detached: true,
         stdio: 'ignore',
       })
