@@ -21,7 +21,7 @@
  *   HERMESOFFICE_REPO        default https://github.com/criptogus/HermesOffice.git
  */
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,6 +44,14 @@ function run(cmd, args, opts = {}) {
 function progress(pct, label) {
   console.log(`PROGRESS ${pct}`)
   if (label) console.log(`STAGE ${label}`)
+}
+
+/** copy a .app bundle preserving symlinks (cpSync/fs.cp break Electron
+ * Framework hardlinks → codesign fails with "unsealed contents in root of
+ * embedded framework"; ditto is the macOS-correct tool for bundles) */
+function copyApp(src, dest) {
+  rmSync(dest, { recursive: true, force: true })
+  run('ditto', [src, dest], { timeout: 300_000 })
 }
 
 /** commit the installed app was built from (build-info.json baked at build time) */
@@ -109,7 +117,7 @@ function cmdBuild() {
 
   rmSync(STAGE_DIR, { recursive: true, force: true })
   mkdirSync(STAGE_DIR, { recursive: true })
-  cpSync(fresh, join(STAGE_DIR, 'HermesOffice.app'), { recursive: true })
+  copyApp(fresh, join(STAGE_DIR, 'HermesOffice.app'))
   progress(95, 'staged')
   console.log(`RESULT ${JSON.stringify({ stage: join(STAGE_DIR, 'HermesOffice.app'), commit: mainCommit() })}`)
 }
@@ -128,8 +136,7 @@ function cmdInstall() {
   if (!existsSync(staged)) throw new Error(`no staged app at ${staged} — run build first`)
 
   progress(98, 'swapping bundle')
-  rmSync(APP_PATH, { recursive: true, force: true })
-  cpSync(staged, APP_PATH, { recursive: true })
+  copyApp(staged, APP_PATH)
   run('codesign', ['--force', '--deep', '--sign', '-', APP_PATH], { timeout: 120_000 })
 
   progress(100, 'relaunching')
