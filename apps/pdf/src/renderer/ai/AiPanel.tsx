@@ -90,6 +90,7 @@ export function AiPanel({
     const deps: PdfAiDeps = {
       doc: () => apiRef.current.doc(),
       fileName: () => apiRef.current.fileName(),
+      filePath: () => apiRef.current.filePath(),
       pageCount: () => apiRef.current.pageCount(),
       currentPage: () => apiRef.current.currentPage(),
       readOnly: () => apiRef.current.readOnly(),

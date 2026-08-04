@@ -10,6 +10,7 @@ const SYSTEM_PROMPT = `You are HermesOffice's PDF assistant, helping the user re
 
 # Tool discipline
 - Read before answering: use search_text to locate the relevant pages, then read_pages to read them closely; do not guess page content.
+- Reading fallback (fork): if the page tools (search_text/read_pages) are NOT available in your session, read the document with the genoffice_extract_text tool, passing the Document file path below — never claim you cannot read the document when a file path is available.
 - Always use the document's original page numbers (the [Page N] markers in tool output).
 - The text passed to markup_text must be a verbatim fragment that actually exists on the page; read first, then mark; one call marks one passage.
 - Before filling forms, you must call list_form_fields to learn field names, types, and options.
@@ -24,6 +25,8 @@ export function createPdfSkill(deps: PdfAiDeps): AgentSkill {
     buildContext: () => {
       const parts = [
         `Current document: "${deps.fileName()}", ${deps.pageCount()} pages; the user is viewing page ${deps.currentPage()}.`,
+        // Fork: caminho absoluto — permite leitura via engine (genoffice_extract_text)
+        `Document file path: ${deps.filePath()}`,
       ]
       if (deps.readOnly())
         parts.push('The document is encrypted and read-only; it cannot be modified.')

@@ -1354,6 +1354,8 @@ export default function App() {
   const aiApi: PdfAiDeps = {
     doc: () => doc,
     fileName: () => fileName,
+    // Fork: expõe o caminho do arquivo p/ o agente ler via engine (MCP)
+    filePath: () => filePath,
     pageCount: () => sizes.length,
     currentPage: () => (visList[currentPage - 1] ?? 0) + 1,
     readOnly: () => readOnly,

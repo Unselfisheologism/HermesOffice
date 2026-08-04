@@ -13,6 +13,8 @@ const READ_CHUNK_CHARS = 24_000
 export interface PdfAiDeps {
   doc(): PDFDocumentProxy | null
   fileName(): string
+  /** Fork: caminho absoluto do arquivo aberto (p/ leitura via engine/MCP) */
+  filePath(): string
   pageCount(): number
   /** Original page number of the currently visible page (1-based) */
   currentPage(): number
