@@ -37,7 +37,8 @@ EXTENSIONS = {".ts", ".tsx", ".js", ".mjs", ".cjs", ".json", ".yml", ".yaml",
 
 # Arquivos/dirs que NUNCA são tocados (atribuição original + artefatos gerados).
 EXCLUDE_DIRS = {"node_modules", ".git", "dist", "out", "release"}
-EXCLUDE_FILES = {"package-lock.json", "LICENSE", "NOTICE"}
+EXCLUDE_FILES = {"package-lock.json", "LICENSE", "NOTICE",
+                 "rebrand-hermesoffice.py"}  # o próprio script não se modifica
 
 # Padrões permitidos a manter "genoffice" (camada de compatibilidade/upstream):
 # nada por enquanto — a Fase 2 define a ponte de compatibilidade se precisar.
@@ -80,12 +81,41 @@ def main() -> int:
     ap.add_argument("--check", action="store_true")
     args = ap.parse_args()
 
+    # Passada 1: reescreve o CONTEÚDO dos arquivos.
     changed = 0
     for path in iter_files():
         if rebrand(path, args.check):
             changed += 1
-    print(f"\n{'check:' if args.check else 'rebrand:'} {changed} arquivo(s)")
-    return 0 if not args.check or changed == 0 else 1
+
+    # Passada 2: renomeia ARQUIVOS cujo nome contém o nome antigo
+    # (ex: genoffice-logo.svg -> hermesoffice-logo.svg). Coleta antes de
+    # renomear para não invalidar a iteração.
+    stale = 0
+    if not args.check:
+        renamed = 0
+        for path in list(iter_files()):
+            new_name = path.name
+            for old, repl in REPLACES:
+                new_name = new_name.replace(old, repl)
+            if new_name != path.name:
+                target = path.with_name(new_name)
+                path.rename(target)
+                print(f"[renm] {path.relative_to(ROOT)} -> {target.name}")
+                renamed += 1
+        if renamed:
+            print(f"rename: {renamed} arquivo(s)")
+    else:
+        # --check: reporta arquivos com nome antigo
+        stale = 0
+        for path in iter_files():
+            if any(old in path.name for old, _ in REPLACES):
+                print(f"[check] nome: {path.relative_to(ROOT)}")
+                stale += 1
+        if stale:
+            print(f"check: {stale} arquivo(s) com nome antigo")
+
+    print(f"\n{'check:' if args.check else 'rebrand:'} {changed} arquivo(s) de conteúdo")
+    return 0 if not args.check or (changed == 0 and stale == 0) else 1
 
 
 if __name__ == "__main__":

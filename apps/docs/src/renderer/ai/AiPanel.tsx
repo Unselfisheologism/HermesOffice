@@ -454,7 +454,10 @@ export function AiPanel({
             return next
           })
           // Signed-out failures get an inline sign-in button; detected via
-          // gsk status rather than matching the localized error text
+          // gsk status rather than matching the localized error text. Only
+          // applies to the Genspark provider — the native Hermes provider
+          // never requires a Genspark login.
+          if (settingsRef.current.provider !== 'genspark') return
           void window.desktop
             .aiGskStatus()
             .then((status) => {

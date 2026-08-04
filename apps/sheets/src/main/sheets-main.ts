@@ -2008,7 +2008,7 @@ export function registerSheetsAiIpc(): void {
     const settings = resolveAiSettings(stored, defaultAiSettings())
     // AI features all go through Genspark (gsk login); legacy settings that chose
     // another provider are reset
-    settings.provider = 'genspark'
+    settings.provider = 'hermes'
     return settings
   })
 

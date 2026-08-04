@@ -1,6 +1,6 @@
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@hermesoffice/agent-core'
 import { httpBodyDetail } from './http-error'
-import { GENSPARK_LLM_BASE_URLS } from './providers'
+import { GENSPARK_LLM_BASE_URLS, HERMES_LLM_BASE_URL } from './providers'
 import type { AiProviderConfig, AiProviderId } from './types'
 
 // ---- streaming (SSE line splitting shared by all providers) ----
@@ -447,6 +447,19 @@ export async function streamForProvider(
   cb: StreamCallbacks,
 ): Promise<void> {
   switch (provider) {
+    case 'hermes':
+      // Native Hermes integration: the local Hermes gateway (API server,
+      // OpenAI-compatible) runs the full agent. baseUrl comes from settings,
+      // defaulting to the local gateway when unset.
+      return streamOpenAiCompatible(
+        config.baseUrl || HERMES_LLM_BASE_URL,
+        config,
+        system,
+        messages,
+        tools,
+        maxTokens,
+        cb,
+      )
     case 'genspark':
       // The proxy exposes three protocol-specific endpoints; route by model id prefix: claude uses
       // the Anthropic protocol (preserves image input fidelity), gemini uses Gemini, rest OpenAI-compatible

@@ -1,6 +1,6 @@
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@hermesoffice/agent-core'
 
-export type AiProviderId = 'genspark' | 'anthropic' | 'gemini' | 'deepseek' | 'openai' | 'custom'
+export type AiProviderId = 'hermes' | 'genspark' | 'anthropic' | 'gemini' | 'deepseek' | 'openai' | 'custom'
 
 /** Genspark account status (gsk login state; the sole auth source for AI features) */
 export interface GenSparkAccountStatus {
@@ -22,6 +22,8 @@ export interface AiProviderMeta {
   defaultModel: string
   keyPlaceholder: string
   needsBaseUrl?: boolean
+  /** default baseUrl when needsBaseUrl (e.g. the local Hermes gateway) */
+  defaultBaseUrl?: string
 }
 
 export interface AiSettings {
