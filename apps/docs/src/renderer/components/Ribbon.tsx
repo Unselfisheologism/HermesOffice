@@ -52,7 +52,7 @@ import {
 import { WRAP_OPTIONS } from './ContextMenu'
 import { CropDialog, CutoutDialog } from './PictureDialogs'
 import {
-  GensparkMark,
+  HermesMark,
   IconAlignCenter,
   IconAlignJustify,
   IconAlignLeft,
@@ -1639,7 +1639,7 @@ export function Ribbon({
           </div>
         ) : tab === 'home' ? (
           <>
-            {/* ---- Genspark AI (first slot: entry + one-click AI actions) ---- */}
+            {/* ---- Hermes AI (first slot: entry + one-click AI actions) ---- */}
             <div className="ribbon-group">
               <div className="ribbon-group-items">
                 <button
@@ -1648,9 +1648,9 @@ export function Ribbon({
                   onClick={onToggleAi}
                 >
                   <span className="rb-big-icon">
-                    <GensparkMark size={26} />
+                    <HermesMark size={26} />
                   </span>
-                  <span>Genspark AI</span>
+                  <span>Hermes AI</span>
                 </button>
                 <button
                   className="rb-big ai-entry"
@@ -1707,7 +1707,7 @@ export function Ribbon({
                   <span>{t('aiPolishBtn')}</span>
                 </button>
               </div>
-              <div className="ribbon-group-label">Genspark AI</div>
+              <div className="ribbon-group-label">Hermes AI</div>
             </div>
 
             <div className="ribbon-sep" />

@@ -31,7 +31,6 @@ import { createI18n, isLang, normalizeLang, setUiLang, type Lang } from '@hermes
 import { installNavigationGuard } from '@hermesoffice/electron-utils'
 import { readAppSettings, writeAppSetting } from './app-settings'
 import { ProjectStore } from '@hermesoffice/project-store'
-import { gskLogin, gskLoginInfo, gskLogout, hasGskAuth } from '@hermesoffice/ai-search'
 
 import {
   buildDocsMenu,
@@ -197,10 +196,8 @@ function persistLang(lang: Lang): void {
 }
 
 // ---- first-run onboarding ----
-// The GenTeam community page opened from the onboarding's second slide.
-// Stable short link served by the genspark.ai site; it 302s to the tokened
-// invite link, which stays out of this repo and rotates server-side.
-const GENTEAM_URL = 'https://www.genspark.ai/hermesoffice/join'
+// Fork: o link de comunidade aponta para o repo do HermesOffice.
+const GENTEAM_URL = 'https://github.com/criptogus/HermesOffice'
 
 const tMain = createI18n({
   zh: {
@@ -1153,17 +1150,31 @@ function statEntries(paths: string[]): RecentEntry[] {
 }
 
 function registerHomeIpc(): void {
-  // Genspark account (gsk login state; to be upgraded to a signup/account system later)
+  // Fork: "conta" = gateway Hermes local (API server :8642). Nada de login
+  // Hermes — o status reflete a disponibilidade do agente Hermes.
   ipcMain.handle(HOME_CHANNELS.accountStatus, async () => {
-    if (!hasGskAuth()) return { loggedIn: false }
-    const info = await gskLoginInfo()
-    return info ? { loggedIn: true, email: info.email } : { loggedIn: true }
+    try {
+      const ctrl = new AbortController()
+      const t = setTimeout(() => ctrl.abort(), 1500)
+      const resp = await fetch('http://127.0.0.1:8642/health', { signal: ctrl.signal })
+      clearTimeout(t)
+      if (resp.ok) {
+        const json = await resp.json().catch(() => null)
+        return { loggedIn: true, email: `Hermes ${json?.version ?? ''}`.trim() }
+      }
+      return { loggedIn: false }
+    } catch {
+      return { loggedIn: false }
+    }
   })
 
-  ipcMain.handle(HOME_CHANNELS.accountLogin, () => gskLogin())
+  // Fork: sem fluxo de login em browser — o "login" apenas re-checa o gateway
+  ipcMain.handle(HOME_CHANNELS.accountLogin, async () => {
+    return null
+  })
 
   ipcMain.handle(HOME_CHANNELS.accountLogout, async () => {
-    await gskLogout()
+    // Fork: não há conta remota para encerrar sessão
   })
 
   ipcMain.handle(HOME_CHANNELS.getAppVersion, (): string => app.getVersion())

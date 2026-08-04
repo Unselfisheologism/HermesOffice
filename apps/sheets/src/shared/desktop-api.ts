@@ -6,7 +6,7 @@ import type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GenSparkAccountStatus,
+  GatewayAccountStatus,
 } from '@hermesoffice/ai-provider'
 
 const MAX_RANGE_CELLS = 20_000
@@ -1900,12 +1900,12 @@ export interface DesktopApi {
   /// start a streaming AI call; deltas arrive via onAiStream with the same requestId
   aiStream(request: AiStreamRequest): Promise<void>
   aiStreamCancel(requestId: string): Promise<void>
-  /// Genspark account status (gsk login state); withEmail also returns the email
+  /// Hermes account status (gsk login state); withEmail also returns the email
   /// (needs a network request, slower)
-  aiGskStatus(withEmail?: boolean): Promise<GenSparkAccountStatus>
-  /// Opens the browser to sign in to Genspark (fire-and-forget; aiGskStatus
+  aiGatewayStatus(withEmail?: boolean): Promise<GatewayAccountStatus>
+  /// Opens the browser to sign in to Hermes (fire-and-forget; aiGatewayStatus
   /// becomes signed-in on completion)
-  aiGskLogin(): Promise<void>
+  aiGatewayLogin(): Promise<void>
   /// Web search (main-process Serper/DuckDuckGo, shared with docs/slides)
   webSearch(query: string, maxResults?: number): Promise<WebSearchResult>
   onAiStream(handler: (chunk: AiStreamChunk) => void): () => void

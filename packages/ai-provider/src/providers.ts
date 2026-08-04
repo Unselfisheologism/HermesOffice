@@ -1,7 +1,7 @@
 import type { AiProviderId, AiProviderMeta, AiSettings, LegacyAiSettings } from './types'
 
 /**
- * Genspark server-side LLM proxy endpoints. All three protocols share the
+ * Upstream (legacy) server-side LLM proxy endpoints. All three protocols share the
  * api_key from the gsk login; model ids follow the proxy's own naming scheme,
  * which differs from the official vendor ids.
  */
@@ -25,7 +25,7 @@ export const AI_PROVIDERS: AiProviderMeta[] = [
   },
   {
     id: 'genspark',
-    label: 'Genspark',
+    label: 'Upstream (legacy)',
     models: [
       'claude-opus-4-7',
       'claude-opus-4-8',
@@ -36,7 +36,7 @@ export const AI_PROVIDERS: AiProviderMeta[] = [
       'gemini-3-flash-preview',
     ],
     defaultModel: 'claude-opus-4-7',
-    keyPlaceholder: 'Not required - sign in to Genspark',
+    keyPlaceholder: 'Not required - legacy upstream login',
   },
   {
     id: 'anthropic',

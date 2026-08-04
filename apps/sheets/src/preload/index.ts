@@ -4,7 +4,7 @@ import type {
   AiChatResponse,
   AiSettings,
   AiStreamChunk,
-  GenSparkAccountStatus,
+  GatewayAccountStatus,
 } from '@hermesoffice/ai-provider'
 import type { ProjectApi } from '@hermesoffice/project-store'
 import type {
@@ -232,15 +232,15 @@ const desktopApi: DesktopApi = {
     if (!requestId) throw new Error('Invalid AI stream request id.')
     await ipcRenderer.invoke(IPC_CHANNELS.aiStreamCancel, requestId)
   },
-  async aiGskStatus(withEmail) {
-    const result: unknown = await ipcRenderer.invoke(IPC_CHANNELS.aiGskStatus, withEmail)
+  async aiGatewayStatus(withEmail) {
+    const result: unknown = await ipcRenderer.invoke(IPC_CHANNELS.aiGatewayStatus, withEmail)
     if (!isRecord(result) || typeof result.loggedIn !== 'boolean') {
-      throw new Error('Invalid Genspark account status response.')
+      throw new Error('Invalid Hermes gateway status response.')
     }
-    return result as unknown as GenSparkAccountStatus
+    return result as unknown as GatewayAccountStatus
   },
-  async aiGskLogin() {
-    await ipcRenderer.invoke(IPC_CHANNELS.aiGskLogin)
+  async aiGatewayLogin() {
+    await ipcRenderer.invoke(IPC_CHANNELS.aiGatewayLogin)
   },
   async webSearch(query, maxResults) {
     if (typeof query !== 'string' || !query.trim() || query.length > 512) {

@@ -7,7 +7,7 @@ export type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GenSparkAccountStatus,
+  GatewayAccountStatus,
   LegacyAiSettings,
 } from './types'
 export { AI_PROVIDERS, GENSPARK_LLM_BASE_URLS, defaultAiSettings, resolveAiSettings } from './providers'

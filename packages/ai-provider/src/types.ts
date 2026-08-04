@@ -2,8 +2,8 @@ import type { AgentMessage, AgentToolCall, AgentToolDef } from '@hermesoffice/ag
 
 export type AiProviderId = 'hermes' | 'genspark' | 'anthropic' | 'gemini' | 'deepseek' | 'openai' | 'custom'
 
-/** Genspark account status (gsk login state; the sole auth source for AI features) */
-export interface GenSparkAccountStatus {
+/** upstream account status (gsk login state; the sole auth source for AI features) */
+export interface GatewayAccountStatus {
   loggedIn: boolean
   email?: string
 }

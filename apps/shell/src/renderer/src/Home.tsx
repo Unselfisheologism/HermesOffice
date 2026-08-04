@@ -386,7 +386,7 @@ function ProjectPanel({ projects, selectedId, onSelect, onRefresh }: ProjectPane
 }
 
 // ── Account entry (bottom-left) ──────────────────────────
-// Currently the Genspark (gsk) login entry; to be upgraded to a signup/account system later.
+// Currently the legacy account entry; to be upgraded to a signup/account system later.
 // Language switching also lives in this popup menu.
 
 const LOGIN_POLL_MS = 2500
@@ -482,7 +482,7 @@ function AccountEntry() {
 
   const loggedIn = status?.loggedIn ?? false
   const email = status?.email ?? ''
-  const initial = email ? email[0].toUpperCase() : loggedIn ? 'G' : '?'
+  const initial = email ? email[0].toUpperCase() : loggedIn ? 'H' : '?'
   const errorText =
     loginError === 'timeout'
       ? t('loginTimeout')
@@ -532,16 +532,12 @@ function AccountEntry() {
   }, [langFly])
 
   const startLogin = () => {
-    // clicking again while waiting = relaunch the browser login and reset the timer (rescue for a mistakenly closed login page)
+    // Fork: sem login em browser — "conectar" re-checa o gateway Hermes local
     setLoginError(null)
-    setWaiting(true)
-    setLoginNonce((n) => n + 1)
     closeMenu()
-    void window.aiOffice.accountLogin().then((launched) => {
-      if (!launched) {
-        setWaiting(false)
-        setLoginError('launch')
-      }
+    void window.aiOffice.accountStatus().then((s) => {
+      setStatus(s)
+      setWaiting(false)
     })
   }
 
@@ -567,7 +563,7 @@ function AccountEntry() {
               onClick={startLogin}
               title={waiting ? t('waitingLogin') : undefined}
             >
-              {waiting ? t('waitingShort') : t('loginGenspark')}
+              {waiting ? t('waitingShort') : t('loginHermes')}
             </button>
           )}
           <div className="account-menu-divider" />
@@ -700,10 +696,10 @@ function AccountEntry() {
         aria-expanded={menuOpen}
         title={
           loggedIn
-            ? email || t('loggedInGenspark')
+            ? email || t('loggedInHermes')
             : waiting
               ? t('waitingLogin')
-              : (errorText ?? t('loginGenspark'))
+              : (errorText ?? t('loginHermes'))
         }
         aria-label={loggedIn ? t('account') : t('login')}
       >
@@ -739,14 +735,14 @@ function AccountEntry() {
             <>
               <span className="account-name">{email ? email.split('@')[0] : t('loggedIn')}</span>
               <span className="account-sub" title={email}>
-                {email || 'Genspark'}
+                {email || 'Hermes'}
               </span>
             </>
           ) : (
             <>
               <span className="account-name">{waiting ? t('waitingShort') : t('login')}</span>
               <span className={`account-sub${!waiting && errorText ? ' error' : ''}`}>
-                {!waiting && errorText ? errorText : t('accountGenspark')}
+                {!waiting && errorText ? errorText : t('accountHermes')}
               </span>
             </>
           )}

@@ -22,7 +22,7 @@ import type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GenSparkAccountStatus,
+  GatewayAccountStatus,
 } from '@hermesoffice/ai-provider'
 
 export type {
@@ -34,7 +34,7 @@ export type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GenSparkAccountStatus,
+  GatewayAccountStatus,
 } from '@hermesoffice/ai-provider'
 export { AI_PROVIDERS } from '@hermesoffice/ai-provider'
 
@@ -190,10 +190,10 @@ export interface DesktopApi {
   /** start a streaming AI call; deltas arrive via onAiStream with the same requestId */
   aiStream(request: AiStreamRequest): Promise<void>
   aiStreamCancel(requestId: string): Promise<void>
-  /** Genspark account status (gsk login state); withEmail also returns the email (needs a network request, slower) */
-  aiGskStatus(withEmail?: boolean): Promise<GenSparkAccountStatus>
-  /** Open the browser to log in to Genspark (fire-and-forget; aiGskStatus flips to logged-in when done) */
-  aiGskLogin(): Promise<void>
+  /** Hermes account status (gsk login state); withEmail also returns the email (needs a network request, slower) */
+  aiGatewayStatus(withEmail?: boolean): Promise<GatewayAccountStatus>
+  /** Open the browser to log in to Hermes (fire-and-forget; aiGatewayStatus flips to logged-in when done) */
+  aiGatewayLogin(): Promise<void>
   webSearch(
     query: string,
     maxResults?: number,

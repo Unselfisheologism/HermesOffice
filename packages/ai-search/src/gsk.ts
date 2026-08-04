@@ -1,5 +1,5 @@
 /**
- * Wrapper around gsk (Genspark CLI, @genspark/cli) — search / image generation /
+ * Wrapper around the upstream gsk CLI — search / image generation /
  * media analysis / upload / transcription.
  *
  * Execution: the main process spawns the CLI's JS entry with
@@ -78,7 +78,7 @@ function electronCompatArgs(): string[] {
   return compatPath ? ['--require', compatPath] : []
 }
 
-/** API key written by gsk login (or GSK_API_KEY env var); '' when not logged in. Also used for Genspark LLM proxy auth. */
+/** API key written by gsk login (or GSK_API_KEY env var); '' when not logged in. Also used for the upstream LLM proxy auth. */
 export function gskApiKey(): string {
   if (process.env.GSK_API_KEY) return process.env.GSK_API_KEY
   try {
@@ -288,7 +288,7 @@ export async function gskResolveDownloadUrl(url: string): Promise<string> {
   }
 }
 
-// ── Cloud single-slide generation (Genspark slide_generate) ─────────
+// ── Cloud single-slide generation (upstream slide_generate) ─────────
 
 /**
  * Calls the tool_cli HTTP endpoint directly so structured params
@@ -338,7 +338,7 @@ async function toolCliPost(
   signal?: AbortSignal,
 ): Promise<unknown> {
   const key = gskApiKey()
-  if (!key) throw new Error('Not logged in to Genspark (gsk login)')
+  if (!key) throw new Error('Upstream search unavailable (no legacy login)')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const onAbort = () => controller.abort()

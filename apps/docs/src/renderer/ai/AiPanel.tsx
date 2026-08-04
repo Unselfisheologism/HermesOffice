@@ -14,7 +14,7 @@ import { createElectronTransport } from './transport'
 import { useI18n, t as tModule, aiLangDirective, type StringKey } from '../i18n/locale'
 import { Markdown } from '@hermesoffice/ui'
 import { AiComposer, AiTypingIndicator } from '@hermesoffice/ui'
-import { GensparkMark } from '../components/icons'
+import { HermesMark } from '../components/icons'
 import sendEnterOn from '../assets/send-enter-on.png'
 import sendEnterOff from '../assets/send-enter-off.png'
 import sendStop from '../assets/send-stop.png'
@@ -67,7 +67,7 @@ interface ChatEntry {
   turnLimit?: boolean
   /** the run failed and this user message was rolled back out of the model context */
   undelivered?: boolean
-  /** the run failed because Genspark is signed out — render an inline sign-in button */
+  /** the run failed because Hermes is signed out — render an inline sign-in button */
   loginRequired?: boolean
   /** tool executions performed during this assistant turn */
   tools?: ToolActivity[]
@@ -455,11 +455,11 @@ export function AiPanel({
           })
           // Signed-out failures get an inline sign-in button; detected via
           // gsk status rather than matching the localized error text. Only
-          // applies to the Genspark provider — the native Hermes provider
-          // never requires a Genspark login.
+          // applies to the Hermes provider — the native Hermes provider
+          // never requires a Hermes login.
           if (settingsRef.current.provider !== 'genspark') return
           void window.desktop
-            .aiGskStatus()
+            .aiGatewayStatus()
             .then((status) => {
               if (status.loggedIn) return
               setChat((prev) => {
@@ -667,7 +667,7 @@ export function AiPanel({
   if (!open) {
     return (
       <button className="ai-rail" title={t('appExpandAiPanel')} onClick={onExpand}>
-        <GensparkMark size={22} />
+        <HermesMark size={22} />
       </button>
     )
   }
@@ -698,7 +698,7 @@ export function AiPanel({
       />
       <div className="ai-panel-header">
         <span className="ai-panel-title">
-          <GensparkMark size={22} />
+          <HermesMark size={22} />
           {t('aiPanelTitle')}
         </span>
         <div className="ai-panel-header-actions">
@@ -798,8 +798,8 @@ export function AiPanel({
                 <div className="ai-msg-error">{t('aiErrorPrefix', { error: entry.error })}</div>
               )}
               {entry.loginRequired && (
-                <button className="ai-login-btn" onClick={() => void window.desktop.aiGskLogin()}>
-                  {t('aiGskLoginBtn')}
+                <button className="ai-login-btn" onClick={() => void window.desktop.aiGatewayLogin()}>
+                  {t('aiGatewayLoginBtn')}
                 </button>
               )}
               {showToolbar && (

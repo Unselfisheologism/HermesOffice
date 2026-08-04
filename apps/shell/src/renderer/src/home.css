@@ -1,6 +1,6 @@
 :root {
-  --accent: #2367ec;
-  --accent-hover: #1b58cf;
+  --accent: #6E4FF6;
+  --accent-hover: #5A3DE0;
   --surface: #ffffff;
   --surface-subtle: #f6f7f9;
   --border: #e3e6ea;
@@ -121,7 +121,7 @@ body.vib .home {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- bottom-left account entry (today = Genspark login, later = signup/account system) ---- */
+/* ---- bottom-left account entry (today = Hermes login, later = signup/account system) ---- */
 /* language switching lives in the account popup menu (.lang-row / .lang-flyout) */
 
 .lang-menu-item {
@@ -238,7 +238,7 @@ body.vib .home {
   color: #b3261e;
 }
 
-/* popup panel metrics match the Genspark account dropdown;
+/* popup panel metrics match the Hermes account dropdown;
    stretched past the account entry (max width the sidebar can host un-clipped) */
 .account-menu {
   position: absolute;

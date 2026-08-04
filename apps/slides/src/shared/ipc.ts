@@ -13,7 +13,7 @@ import type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GenSparkAccountStatus,
+  GatewayAccountStatus,
 } from '@hermesoffice/ai-provider'
 
 export type { SlideComment, SectionInfo } from '@hermesoffice/pptx-engine'
@@ -26,7 +26,7 @@ export type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GenSparkAccountStatus,
+  GatewayAccountStatus,
 } from '@hermesoffice/ai-provider'
 export { AI_PROVIDERS } from '@hermesoffice/ai-provider'
 export type { AgentToolCall, AgentToolDef } from '@hermesoffice/agent-core'
@@ -1285,10 +1285,10 @@ export interface SlidesApi {
   setAiSettings: (settings: AiSettings) => Promise<void>
   aiStream: (request: AiStreamRequest) => Promise<void>
   aiStreamCancel: (requestId: string) => Promise<void>
-  /** Genspark account status (gsk login state); with withEmail also fetches the email (needs a network request, slower) */
-  aiGskStatus: (withEmail?: boolean) => Promise<GenSparkAccountStatus>
-  /** Open the browser to log into Genspark (fire-and-forget; aiGskStatus turns logged-in once done) */
-  aiGskLogin: () => Promise<void>
+  /** Hermes account status (gsk login state); with withEmail also fetches the email (needs a network request, slower) */
+  aiGatewayStatus: (withEmail?: boolean) => Promise<GatewayAccountStatus>
+  /** Open the browser to log into Hermes (fire-and-forget; aiGatewayStatus turns logged-in once done) */
+  aiGatewayLogin: () => Promise<void>
   webSearch: (
     query: string,
     maxResults?: number,
@@ -1320,7 +1320,7 @@ export interface SlidesApi {
     hPx: number
     fitWidthPx: number
   }) => Promise<{ slide: RenderSlide; sourceId: string } | null>
-  /** gsk (Genspark) AI image generation/editing, returns the image URL (error prompts login when logged out) */
+  /** gsk (Hermes) AI image generation/editing, returns the image URL (error prompts login when logged out) */
   generateImage: (op: {
     prompt: string
     model?: string
@@ -1328,7 +1328,7 @@ export interface SlidesApi {
     aspectRatio?: string
     imageSize?: string
   }) => Promise<{ url?: string; error?: string }>
-  /** gsk (Genspark) media analysis: image/audio/video content understanding, returns analysis text */
+  /** gsk (Hermes) media analysis: image/audio/video content understanding, returns analysis text */
   analyzeMedia: (op: {
     mediaUrls: string[]
     requirements: string

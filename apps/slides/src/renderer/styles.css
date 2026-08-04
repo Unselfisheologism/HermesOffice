@@ -1,7 +1,7 @@
 :root {
-  --accent: #c43e1c;
-  --accent-dark: #a33517;
-  --accent-soft: #fbeae5;
+  --accent: #6E4FF6;
+  --accent-dark: #5A3DE0;
+  --accent-soft: #EFEAFE;
   --surface: #ffffff;
   --chrome-bg: #ffffff;
   --border: #e1dfdd;
@@ -327,15 +327,15 @@ button {
   box-shadow: 0 2px 6px rgba(74, 92, 255, 0.25);
 }
 
-/* Genspark brand logo (Ribbon AI button / AI panel title / collapsed entry) */
-.genspark-badge {
+/* Hermes brand logo (Ribbon AI button / AI panel title / collapsed entry) */
+.hermes-badge {
   display: block;
   width: 22px;
   height: 22px;
   border-radius: 50%;
 }
 
-.ai-panel-title .genspark-badge {
+.ai-panel-title .hermes-badge {
   width: 18px;
   height: 18px;
 }
@@ -431,7 +431,7 @@ button {
   color: #232425;
 }
 
-/* Home-tab Genspark AI entry: black circular "+" badge with a dropdown caret,
+/* Home-tab Hermes AI entry: black circular "+" badge with a dropdown caret,
    brand label below (mirrors the sheets Home ribbon). */
 /* AI feature buttons next to the entry: purple glyphs, label below */
 .ai-feature-icon {
@@ -477,7 +477,7 @@ button {
   background: var(--active-bg);
 }
 
-/* The Genspark AI entry keeps a black label even while the panel is open. */
+/* The Hermes AI entry keeps a black label even while the panel is open. */
 .rb-big.ai-entry.active {
   color: var(--text);
 }
@@ -3065,7 +3065,7 @@ body.vib .slide-list {
 }
 
 .rb-anim-exit {
-  color: #c43e1c;
+  color: #6E4FF6;
 }
 
 .rb-anim-path {
@@ -3150,7 +3150,7 @@ body.vib .slide-list {
 }
 
 .anim-row.anim-exit {
-  border-left-color: #c43e1c;
+  border-left-color: #6E4FF6;
 }
 
 .anim-row.anim-path {
@@ -3494,10 +3494,10 @@ body.vib .slide-list {
 }
 
 /* AI quick actions anchored right above the slide card (mirrors the Home-tab
-   Genspark AI group); absolute so it doesn't distort the zoom-box extent.
+   Hermes AI group); absolute so it doesn't distort the zoom-box extent.
    z-index lifts it over the Konva stage's transparent 160px bleed, which
    otherwise swallows the clicks */
-/* Genspark SAS floating toolbar, matched to the reference stage-toolbar:
+/* Hermes SAS floating toolbar, matched to the reference stage-toolbar:
    white bar (padding 3px 5px, ~35px tall); 24px borderless tool buttons
    with 12px #374151 labels; thin span dividers separate the groups; the
    assistant toggle shows a gray selected state while the panel is open */
@@ -3556,7 +3556,7 @@ body.vib .slide-list {
 
 .stage-ai-btn svg {
   flex-shrink: 0;
-  /* AI feature glyphs match the ribbon's blue; the Genspark brand mark
+  /* AI feature glyphs match the ribbon's blue; the Hermes brand mark
      carries its own fills and ignores currentColor */
   color: #0f7fff;
 }

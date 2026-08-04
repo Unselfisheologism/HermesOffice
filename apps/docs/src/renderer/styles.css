@@ -1,7 +1,7 @@
 :root {
-  --word-blue: #185abd;
-  --word-blue-dark: #124a9e;
-  --word-heading: #2f5496;
+  --word-blue: #6E4FF6;
+  --word-blue-dark: #5A3DE0;
+  --word-heading: #5A3DE0;
   --surface: #ffffff;
   --chrome-bg: #ffffff;
   --border: #e1dfdd;
@@ -10,7 +10,7 @@
   --text-dim: #605e5c;
   --hover: #f3f2f1;
   --pressed: #edebe9;
-  --active-bg: #e8f1fb;
+  --active-bg: #EFEAFE;
   --canvas: #e6e6e6;
   --ai-highlight: #fff3c4;
   --ai-highlight-border: #f2b900;
@@ -267,15 +267,15 @@ button {
   box-shadow: 0 2px 6px rgba(74, 92, 255, 0.25);
 }
 
-/* Genspark brand logo (Ribbon AI button and AI panel title) */
-.genspark-badge {
+/* Hermes brand logo (Ribbon AI button and AI panel title) */
+.hermes-badge {
   display: block;
   width: 22px;
   height: 22px;
   border-radius: 50%;
 }
 
-.ai-panel-title .genspark-badge {
+.ai-panel-title .hermes-badge {
   width: 18px;
   height: 18px;
 }
@@ -437,7 +437,7 @@ button {
   background: var(--active-bg);
 }
 
-/* The Genspark AI entry keeps a black label even while the panel is open. */
+/* The Hermes AI entry keeps a black label even while the panel is open. */
 .rb-big.ai-entry.active {
   color: var(--text);
 }
@@ -457,7 +457,7 @@ button {
   background: var(--hover);
 }
 
-/* Neutral gray, not the Word-blue --active-bg: the Genspark entry is the same
+/* Neutral gray, not the Word-blue --active-bg: the Hermes entry is the same
    control across docs/sheets/slides, so its open state matches their ribbons. */
 .rb-big.ai-entry.active {
   background: #e2e0de;
@@ -892,7 +892,7 @@ button {
 }
 
 /* line spacing dropdown */
-/* Home-tab Genspark AI entry: black circular "+" badge with a dropdown caret,
+/* Home-tab Hermes AI entry: black circular "+" badge with a dropdown caret,
    brand label below (mirrors the sheets Home ribbon). */
 /* AI feature buttons next to the entry: purple glyphs, label below */
 .ai-feature-icon {
@@ -1134,7 +1134,7 @@ button {
   display: block;
   width: 36px;
   height: 24px;
-  border: 1.5px solid #2f5496;
+  border: 1.5px solid #6E4FF6;
 }
 
 .shape-label {
@@ -1467,7 +1467,7 @@ th.cell-rev-del {
 }
 
 .layout-menu button.pos-cell.active {
-  border-color: var(--accent, #2b579a);
+  border-color: var(--accent, #6E4FF6);
   background: var(--active-bg);
 }
 
@@ -2398,7 +2398,7 @@ th.cell-rev-del {
   height: 10px;
   font-size: 8px;
   font-weight: bold;
-  color: #185abd;
+  color: #6E4FF6;
   cursor: move;
   transform: translateX(-50%);
   text-align: center;
@@ -3303,7 +3303,7 @@ th.cell-rev-del {
 }
 
 .doc-toc-line:hover .doc-toc-title {
-  color: var(--accent, #2b579a);
+  color: var(--accent, #6E4FF6);
   text-decoration: underline;
 }
 
@@ -6240,7 +6240,7 @@ ruby.doc-ruby.ProseMirror-selectednode {
 }
 
 .ink-swatch.active {
-  outline: 2px solid var(--accent, #185abd);
+  outline: 2px solid var(--accent, #6E4FF6);
   outline-offset: 1px;
 }
 
@@ -6267,7 +6267,7 @@ ruby.doc-ruby.ProseMirror-selectednode {
 }
 
 .ink-width.active {
-  border-color: var(--accent, #185abd);
+  border-color: var(--accent, #6E4FF6);
   background: var(--hover, rgba(24, 90, 189, 0.08));
 }
 
@@ -6508,7 +6508,7 @@ tr > .page-gap-cut {
 }
 
 .list-gallery-card:hover {
-  border-color: var(--accent, #2b579a);
+  border-color: var(--accent, #6E4FF6);
 }
 
 .list-gallery-multi {
@@ -6536,7 +6536,7 @@ tr > .page-gap-cut {
 }
 
 .list-gallery-define:hover {
-  color: var(--accent, #2b579a);
+  color: var(--accent, #6E4FF6);
 }
 
 /* Define New Multilevel List dialog */
