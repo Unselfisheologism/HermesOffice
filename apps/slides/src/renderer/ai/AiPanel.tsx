@@ -17,6 +17,13 @@ import { renderSlidesToPngBase64 } from '../export-render'
 import { isQcEnabled, mergeQcPages, qcSlidePage, QC_MAX_PAGES } from './slide-qc'
 import { useI18n, t as tGlobal, aiLangDirective, type TFunc } from '../i18n/locale'
 import { Markdown } from '@hermesoffice/ui'
+
+// Fork: convenções do agente Hermes — invocação de skills e relatórios de documentos
+const HERMES_COMMANDS = `
+# Hermes commands
+- Skill invocation: when the user writes /<skill-name> or @<skill-name> (e.g. /board-intelligence), load that skill with skill_view (use skills_list to find it when the name is approximate) and follow its instructions for the current task. Prefer the exact match; resolve ambiguity with the closest available skill.
+- Document reports: when the user asks you to read a document (pdf/pptx/docx/xlsx) and produce a report, follow this flow: (1) read the document with genoffice_extract_text; (2) write the report as a new .docx with genoffice_docx_create; (3) open it in the app with genoffice_app_open_file so it opens in a new tab; (4) reply with the report file path in the chat.
+- Use these genoffice_* tools for file I/O even when the app-specific tools (block/page tools) are unavailable.`
 import { HermesMark } from '../components/icons'
 import sendEnterOn from '../assets/send-enter-on.png'
 import sendEnterOff from '../assets/send-enter-off.png'
@@ -920,7 +927,7 @@ export function AiPanel({
     accessRef.current = access
     loopRef.current = new AgentLoop({
       transport: createElectronTransport(() => settingsRef.current),
-      systemSuffix: aiLangDirective,
+      systemSuffix: () => aiLangDirective() + HERMES_COMMANDS,
       skill: composeSkills('slides+files', '', [
         createSlidesSkill(access),
         createFilesSkill(
