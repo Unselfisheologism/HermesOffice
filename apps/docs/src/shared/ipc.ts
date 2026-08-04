@@ -14,7 +14,7 @@ export interface PickImageResult {
   name: string
 }
 
-// ---- AI provider settings/config/streaming: canonical types live in @genoffice/ai-provider ----
+// ---- AI provider settings/config/streaming: canonical types live in @hermesoffice/ai-provider ----
 
 import type {
   AiChatRequest,
@@ -23,7 +23,7 @@ import type {
   AiStreamChunk,
   AiStreamRequest,
   GenSparkAccountStatus,
-} from '@genoffice/ai-provider'
+} from '@hermesoffice/ai-provider'
 
 export type {
   AiChatRequest,
@@ -35,17 +35,17 @@ export type {
   AiStreamChunk,
   AiStreamRequest,
   GenSparkAccountStatus,
-} from '@genoffice/ai-provider'
-export { AI_PROVIDERS } from '@genoffice/ai-provider'
+} from '@hermesoffice/ai-provider'
+export { AI_PROVIDERS } from '@hermesoffice/ai-provider'
 
-// ---- agent protocol: canonical types live in @genoffice/agent-core ----
+// ---- agent protocol: canonical types live in @hermesoffice/agent-core ----
 
 export type {
   AgentMessage,
   AgentToolCall,
   AgentToolDef,
   AgentToolResult,
-} from '@genoffice/agent-core'
+} from '@hermesoffice/agent-core'
 
 // ---- chat attachments (local files fed to the agent via tools) ----
 

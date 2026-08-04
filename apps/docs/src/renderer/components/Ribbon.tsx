@@ -26,7 +26,7 @@ import type {
   StyleInfo,
   ThemeColors,
   ThemeFonts,
-} from '@genoffice/docx-engine'
+} from '@hermesoffice/docx-engine'
 import { getActiveSubEditor } from '../editor/active-editor'
 import { HIGHLIGHT_CSS } from '../editor/extensions'
 import { stepParagraphIndent } from '../editor/indent'

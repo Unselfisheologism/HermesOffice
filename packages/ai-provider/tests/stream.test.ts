@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentToolCall } from '@genoffice/agent-core'
+import type { AgentToolCall } from '@hermesoffice/agent-core'
 import { sseLines, streamForProvider } from '../src/stream'
 import { okResponse, sseStream } from './test-utils'
 

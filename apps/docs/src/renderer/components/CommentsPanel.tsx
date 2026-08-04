@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CommentInfo } from '@genoffice/docx-engine'
+import type { CommentInfo } from '@hermesoffice/docx-engine'
 import { useI18n } from '../i18n/locale'
 import { IconComment, IconTrash } from './icons'
 

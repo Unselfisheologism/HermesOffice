@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Block, GeneratedBlock } from '@genoffice/docx-engine'
+import type { Block, GeneratedBlock } from '@hermesoffice/docx-engine'
 import {
   inlineToRuns,
   signatureOfBlock,

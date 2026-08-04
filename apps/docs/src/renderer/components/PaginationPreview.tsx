@@ -5,7 +5,7 @@ import type {
   HfPartInfo,
   SectionInfo,
   SectionSettings,
-} from '@genoffice/docx-engine'
+} from '@hermesoffice/docx-engine'
 import {
   appendEndnotesBlock,
   assignSections,

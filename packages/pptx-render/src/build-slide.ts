@@ -13,10 +13,10 @@ import type {
   ChartElement,
   PassthroughElement,
   ArrowEnd,
-} from '@genoffice/pptx-engine'
+} from '@hermesoffice/pptx-engine'
 // Subpath import: the renderer bundles this package, so pulling the engine's index
 // (Node-only imports like node:crypto) would break the browser build
-import { tableRowGridCols } from '@genoffice/pptx-engine/table-grid'
+import { tableRowGridCols } from '@hermesoffice/pptx-engine/table-grid'
 import { buildChartNode } from './build-chart'
 import type {
   RenderSlide,

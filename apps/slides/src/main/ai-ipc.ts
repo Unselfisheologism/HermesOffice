@@ -16,8 +16,8 @@ import {
   type AiStreamRequest,
   type GenSparkAccountStatus,
   type LegacyAiSettings,
-} from '@genoffice/ai-provider'
-import { fetchWithSsrfGuard } from '@genoffice/electron-utils'
+} from '@hermesoffice/ai-provider'
+import { fetchWithSsrfGuard } from '@hermesoffice/electron-utils'
 import {
   webSearch,
   imageSearch,
@@ -27,13 +27,13 @@ import {
   gskLogin,
   gskLoginInfo,
   hasGskAuth,
-} from '@genoffice/ai-search'
-import { addPicture } from '@genoffice/pptx-engine'
-import { EMU_PER_PX_96 } from '@genoffice/pptx-render'
+} from '@hermesoffice/ai-search'
+import { addPicture } from '@hermesoffice/pptx-engine'
+import { EMU_PER_PX_96 } from '@hermesoffice/pptx-render'
 import { tm } from './i18n-main'
 import { pushHistory, rebuildSlide, sessions } from './session-state'
 
-// ---- AI settings + streaming proxy (the main process does the networking to avoid renderer CORS; implementation shared via @genoffice/ai-provider) ----
+// ---- AI settings + streaming proxy (the main process does the networking to avoid renderer CORS; implementation shared via @hermesoffice/ai-provider) ----
 
 const AI_SETTINGS_PATH = () => join(app.getPath('userData'), 'ai-settings.json')
 

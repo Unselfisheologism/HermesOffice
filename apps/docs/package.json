@@ -1,6 +1,6 @@
 {
-  "name": "@genoffice/docs",
-  "productName": "GenOffice Docs",
+  "name": "@hermesoffice/docs",
+  "productName": "HermesOffice Docs",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "private": true,
@@ -18,14 +18,14 @@
     "dist:dir": "electron-vite build && electron-builder --dir"
   },
   "devDependencies": {
-    "@genoffice/agent-core": "*",
-    "@genoffice/i18n": "*",
-    "@genoffice/ai-provider": "*",
-    "@genoffice/ai-search": "*",
-    "@genoffice/docx-engine": "*",
-    "@genoffice/file-parse": "*",
-    "@genoffice/project-store": "*",
-    "@genoffice/ui": "*",
+    "@hermesoffice/agent-core": "*",
+    "@hermesoffice/i18n": "*",
+    "@hermesoffice/ai-provider": "*",
+    "@hermesoffice/ai-search": "*",
+    "@hermesoffice/docx-engine": "*",
+    "@hermesoffice/file-parse": "*",
+    "@hermesoffice/project-store": "*",
+    "@hermesoffice/ui": "*",
     "@tiptap/core": "^3.28.0",
     "@tiptap/extensions": "^3.28.0",
     "@tiptap/pm": "^3.28.0",
@@ -45,10 +45,10 @@
     "vite": "^7.3.1",
     "vitest": "^4.1.0"
   },
-  "author": "GenOffice",
+  "author": "HermesOffice",
   "build": {
-    "appId": "com.genoffice.docs",
-    "productName": "GenOffice Docs",
+    "appId": "com.hermesoffice.docs",
+    "productName": "HermesOffice Docs",
     "electronVersion": "41.7.1",
     "artifactName": "AIDocx-${version}-${arch}.${ext}",
     "directories": {
@@ -89,7 +89,7 @@
     }
   },
   "dependencies": {
-    "@genoffice/electron-utils": "*",
+    "@hermesoffice/electron-utils": "*",
     "electron-updater": "^6.8.9",
     "pdf-lib": "^1.17.1"
   }

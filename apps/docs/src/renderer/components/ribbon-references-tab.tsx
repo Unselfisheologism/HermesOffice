@@ -9,7 +9,7 @@ import {
   type Block,
   type SourceInfo,
   type TocEntry,
-} from '@genoffice/docx-engine'
+} from '@hermesoffice/docx-engine'
 import { PromptModal } from './PromptModal'
 import { t, useI18n, type StringKey } from '../i18n/locale'
 import {

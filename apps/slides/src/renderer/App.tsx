@@ -8,7 +8,7 @@ import type {
   ChartRenderNode,
   PictureRenderNode,
   TableRenderNode,
-} from '@genoffice/pptx-render'
+} from '@hermesoffice/pptx-render'
 import type {
   AiSettings,
   AnimEffectKind,

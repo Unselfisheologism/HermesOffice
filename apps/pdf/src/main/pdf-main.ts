@@ -3,8 +3,8 @@ import { readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { BrowserWindow, WebContentsView, app, dialog, ipcMain, shell } from 'electron'
 import type { WebContents } from 'electron'
-import { installNavigationGuard, safeExternalUrl } from '@genoffice/electron-utils'
-import { createI18n, getUiLang } from '@genoffice/i18n'
+import { installNavigationGuard, safeExternalUrl } from '@hermesoffice/electron-utils'
+import { createI18n, getUiLang } from '@hermesoffice/i18n'
 import { PDF_CHANNELS } from '../shared/ipc'
 import type {
   ExportImagesRequest,
@@ -492,7 +492,7 @@ export function createPdfView(openPath?: string | null): WebContentsView {
   return view
 }
 
-/** Standalone window mode: `npm run dev -w @genoffice/pdf`, pdf path passed via argv */
+/** Standalone window mode: `npm run dev -w @hermesoffice/pdf`, pdf path passed via argv */
 export function startPdfStandalone(): void {
   installNavigationGuard(app)
   configurePdfRuntime({

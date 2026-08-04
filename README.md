@@ -1,109 +1,116 @@
-# GenOffice
+# HermesOffice
 
-An AI-native office suite for macOS and Windows: word processor, spreadsheet,
-presentations, and PDF — five Electron apps sharing one engine layer, built
-around AI editing as a first-class workflow rather than a bolted-on chat box.
+Suíte office AI-nativa para macOS e Windows: processador de texto,
+planilha, apresentações e PDF — cinco apps Electron compartilhando uma
+camada de engines, construída em torno de edição por IA como fluxo de
+primeira classe, não um chat acoplado.
+
+> **Fork de [genspark-ai/genoffice](https://github.com/genspark-ai/genoffice)**
+> (Apache-2.0). Este é um *thin fork*: o código de engines e apps segue o
+> upstream, com uma camada própria de identidade e integração com o
+> **Hermes Agent** (Nous Research) como IA nativa.
 
 ## Download
 
-Signed installers built from `main`:
-
-- **macOS** (Apple Silicon): [GenOffice-0.4.110-arm64.dmg](https://github.com/genspark-ai/genoffice/releases/download/v0.4.110/GenOffice-0.4.110-arm64.dmg)
-- **Windows** (x64): [GenOfficeSetup-v0.4.110.exe](https://github.com/genspark-ai/genoffice/releases/download/v0.4.110/GenOfficeSetup-v0.4.110.exe)
-
-Other versions are on the [Releases](https://github.com/genspark-ai/genoffice/releases) page.
+Releases assinados do fork serão publicados aqui (em construção — use o
+[GenOffice upstream](https://github.com/genspark-ai/genoffice/releases) ou
+compile local com `npm run dist:mac`).
 
 ## Apps
 
-| App           | Product              | What it is                                                                                                                                                                                                                                                                                                                                                 |
-| ------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/docs`   | **GenOffice Docs**   | `.docx` word processor. Byte-preserving round trip: only dirty paragraphs are regenerated (paragraph patch), everything else in the original file is kept byte-for-byte, so opening and saving never breaks layout in Word. Paginated view whose line metrics reproduce the original document's layout, tracked changes, comments, styles, equations, ink. |
-| `apps/sheets` | **GenOffice Sheets** | `.xlsx` spreadsheet. UI built on the open-source [Univer](https://github.com/dream-num/univer) core (Apache-2.0) with a large layer of in-house extensions; xlsx import/export runs through an in-house Rust sidecar (calamine + IronCalc), charts are rendered in-house (Konva), plus pivot tables, slicers, conditional formatting, and formula tracing. |
-| `apps/slides` | **GenOffice Slides** | `.pptx` presentations. In-house pptx parse/render/edit engine with masters, charts, cropping, ink, and text shaping (HarfBuzz metrics).                                                                                                                                                                                                                    |
-| `apps/pdf`    | **GenOffice PDF**    | PDF viewer/editor on pdf.js + pdf-lib: annotations, forms, outlines, stamps, signatures, page operations, print.                                                                                                                                                                                                                                           |
-| `apps/shell`  | **GenOffice**        | The suite shell: home screen, tabbed hosting of the four editors, auto-update.                                                                                                                                                                                                                                                                             |
+| App           | Product              | O que é                                                                                                                                                                                                                                                                                                                                                 |
+| ------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/docs`   | **HermesOffice Docs**   | Processador `.docx`. Round-trip byte-preserving: só parágrafos "dirty" são regenerados (paragraph patch); todo o resto do arquivo original permanece byte a byte, então abrir e salvar nunca quebra layout no Word. Visualização paginada cuja métrica de linha reproduz o layout do original, tracked changes, comentários, estilos, equações, ink. |
+| `apps/sheets` | **HermesOffice Sheets** | Planilha `.xlsx`. UI sobre o core open-source [Univer](https://github.com/dream-num/univer) (Apache-2.0) com camada extensa de extensões próprias; import/export xlsx via sidecar Rust (calamine + IronCalc), gráficos renderizados in-house (Konva), pivot tables, slicers, formatação condicional e formula tracing.                                     |
+| `apps/slides` | **HermesOffice Slides** | Apresentações `.pptx`. Engine própria de parse/render/edit pptx com masters, gráficos, crop, ink e text shaping (métricas HarfBuzz).                                                                                                                                                                                                                      |
+| `apps/pdf`    | **HermesOffice PDF**    | Visualizador/editor PDF em pdf.js + pdf-lib: anotações, formulários, outlines, carimbos, assinaturas, operações de página, impressão.                                                                                                                                                                                                                       |
+| `apps/shell`  | **HermesOffice**        | O shell da suíte: home screen, hosting em abas dos quatro editores, auto-update.                                                                                                                                                                                                                                                                          |
 
-Every app embeds the same AI panel: block-granular AI editing with version
-snapshots and diffs in docs, a tool-calling agent over workbook/slide/PDF
-state in the others.
+Cada app embute o mesmo painel de IA: edição por IA em granularidade de bloco
+com snapshots e diffs no docs, agente com tool-calling sobre o estado de
+planilha/slides/PDF nos outros.
 
-**AI providers.** The apps sign in to a Genspark account and route model
-calls through the Genspark service side; no model API key is stored locally.
+**IA nativa (Hermes).** Neste fork o provider padrão é o **Hermes Agent**
+local — o gateway do Hermes expõe um endpoint OpenAI-compatible
+(`http://127.0.0.1:8642/v1`) que roda o agente completo (memória, skills,
+tools, MCP). Sem conta Genspark, sem proxy de terceiros: 100% local.
+*(Integração em desenvolvimento — ver `docs/hermes-integration.md`.)*
 
 ## Engine packages
 
-All pure TypeScript, no Electron dependency, unit-tested (except the UI kit):
+TypeScript puro, sem dependência de Electron, com testes unitários (exceto o UI kit):
 
-- `packages/docx-engine` — docx parsing → block tree (with `docxIndex`
-  anchors and passthrough), OOXML fragment generation, byte-level paragraph
-  patching.
-- `packages/pptx-engine` / `packages/pptx-render` — pptx model and rendering.
-- `packages/file-parse` — text extraction for AI attachments (office formats,
-  text formats).
-- `packages/agent-core` — the AI agent loop and skill composition shared by
-  every app.
-- `packages/ai-provider` — provider abstraction and streaming for the model
-  backends.
-- `packages/ai-search` — Genspark auth + web/image search tools.
-- `packages/i18n`, `packages/ui`, `packages/project-store`,
-  `packages/electron-utils` — shared i18n core, React UI kit, recent-files
-  store, and Electron main-process helpers.
+- `packages/docx-engine` — parse de docx → árvore de blocos (com âncoras `docxIndex` e passthrough), geração de fragmentos OOXML, patch de parágrafos em nível de byte.
+- `packages/pptx-engine` / `packages/pptx-render` — modelo e renderização pptx.
+- `packages/file-parse` — extração de texto para anexos de IA (formatos office e texto).
+- `packages/agent-core` — o loop de agente e composição de skills compartilhado por todos os apps.
+- `packages/ai-provider` — abstração de provider e streaming para os backends de modelo.
+- `packages/ai-search` — auth Genspark + ferramentas de busca web/imagem (mantido do upstream; o fork não depende dele).
+- `packages/i18n`, `packages/ui`, `packages/project-store`, `packages/electron-utils` — i18n compartilhado, kit React UI, store de recentes e helpers do processo main.
 
 ## Development
 
 ```bash
 npm install
-npm run fixtures     # generate test .docx fixtures
-npm test             # engine + app unit tests (docs/sheets/slides need no display)
-npm run typecheck    # tsc --noEmit across every workspace
-npm run dev          # all four editors + shell against Vite dev servers
-npm run dev:docs     # a single app (same pattern works per workspace)
-npm run dist:mac     # package macOS dmg (regenerates third-party notices)
-npm run dist:win     # package Windows nsis installer
+npm run fixtures     # gera fixtures .docx de teste
+npm test             # testes unitários de engines + apps (docs/sheets/slides sem display)
+npm run typecheck    # tsc --noEmit em todos os workspaces
+npm run dev          # todos os editores + shell contra dev servers Vite
+npm run dev:docs     # um único app (mesmo padrão por workspace)
+npm run dist:mac     # empacota dmg macOS (regenera third-party notices)
+npm run dist:win     # empacota instalador nsis Windows
 ```
 
-The sheets app additionally needs a Rust toolchain for its xlsx sidecar
-(`cargo` on PATH); `npm run build -w @genoffice/sheets` compiles it
-automatically.
+O app sheets adicionalmente precisa de toolchain Rust para o sidecar xlsx
+(`cargo` no PATH); `npm run build -w @hermesoffice/sheets` compila
+automaticamente.
 
-Local UI/e2e driver scripts (Playwright + Electron, for local acceptance, not
-committed by default) live in [`scripts/drivers/`](scripts/drivers/README.md).
+### Sync com o upstream
 
-## Architecture notes (docx round trip)
-
-```
-open docx ─► archive original by hash (never touched)
-          ─► docx-engine parses word/document.xml top-level elements (w:p / w:tbl / …)
-          ─► Block tree, each block anchored by docxIndex + original XML slice
-          ─► TipTap streaming editor (manual + AI editing, dirty tracking)
-save      ─► dirty blocks → OOXML fragments (referencing existing styles only)
-          ─► splice into original document.xml (untouched blocks keep original bytes)
-          ─► repack zip; all other entries copied byte-for-byte
+```bash
+git fetch upstream
+git merge upstream/main        # resolve conflitos na camada de fork (rebrand/integração)
+python3 tools/rebrand-hermesoffice.py   # garante que nenhum "genoffice" voltou
+npm install && npm run typecheck
 ```
 
-The same philosophy holds in sheets and slides: the original file is the
-source of truth, edits are applied as narrow patches, and everything the
-editor didn't touch survives the round trip untouched.
+## Arquitetura (docx round trip)
 
-## Security
+```
+open docx ─► arquiva original por hash (nunca tocado)
+          ─► docx-engine parseia os elementos top-level de word/document.xml (w:p / w:tbl / …)
+          ─► árvore de blocos, cada bloco ancorado por docxIndex + fatia XML original
+          ─► editor streaming TipTap (manual + edição IA, dirty tracking)
+save      ─► blocos dirty → fragmentos OOXML (referenciando só estilos existentes)
+          ─► splice no document.xml original (blocos intocados mantêm os bytes originais)
+          ─► reempacota zip; todos os outros entries copiados byte a byte
+```
 
-See [SECURITY.md](SECURITY.md) for the process security posture (renderer
-sandboxing, IPC validation, external-link gating) and the threat models for
-AI-generated content.
+A mesma filosofia vale em sheets e slides: o arquivo original é a fonte da
+verdade, edições são patches estreitos, e tudo que o editor não tocou
+sobrevive ao round trip intacto.
+
+## Segurança
+
+Ver [SECURITY.md](SECURITY.md) para a postura de segurança do processo
+(sandboxing do renderer, validação IPC, gating de links externos) e os threat
+models para conteúdo gerado por IA.
 
 ## Third-party notices
 
-`npm run notices` regenerates the bundled third-party license summary
-(`tools/gen-third-party-notices.mjs`); all runtime dependencies are
-MIT/Apache-2.0/OFL, and the bundled fonts (Liberation, Carlito, Caladea, Noto
-CJK subsets) are OFL/Apache.
+`npm run notices` regenera o resumo de licenças de terceiros
+(`tools/gen-third-party-notices.mjs`); todas as dependências runtime são
+MIT/Apache-2.0/OFL, e as fontes embutidas (Liberation, Carlito, Caladea, Noto
+CJK subsets) são OFL/Apache.
 
-## License
+## Licença
 
-GenOffice is licensed under the [Apache License 2.0](LICENSE), with one
-exception: the `ee/` directory is reserved for future enterprise modules and
-is covered by the [GenOffice Enterprise License](ee/LICENSE).
+HermesOffice é licenciado sob a [Apache License 2.0](LICENSE), com uma
+exceção: o diretório `ee/` é reservado para futuros módulos enterprise e é
+coberto pela [HermesOffice Enterprise License](ee/LICENSE).
 
-The GenOffice and Genspark names and logos are trademarks of Mainfunc, Inc.
-The Apache-2.0 license does not grant permission to use them (see section 6);
-forks should use their own branding.
+**Atribuição**: este projeto é um fork de
+[genspark-ai/genoffice](https://github.com/genspark-ai/genoffice) (Apache-2.0,
+Copyright Mainfunc, Inc.), mantendo o [NOTICE](NOTICE) original. Os nomes e
+logos GenOffice e Genspark são trademarks da Mainfunc, Inc. e não são usados
+por este fork — que adota branding próprio, conforme a licença.

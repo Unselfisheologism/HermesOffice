@@ -1,10 +1,10 @@
 {
-  "name": "@genoffice/shell",
-  "productName": "GenOffice",
+  "name": "@hermesoffice/shell",
+  "productName": "HermesOffice",
   "version": "0.4.0",
   "license": "Apache-2.0",
   "private": true,
-  "description": "Unified GenOffice shell: one app hosting the docs and sheets modules behind a home/launcher window",
+  "description": "Unified HermesOffice shell: one app hosting the docs and sheets modules behind a home/launcher window",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev --watch",
@@ -16,17 +16,17 @@
     "dist:win": "electron-vite build && electron-builder --win"
   },
   "devDependencies": {
-    "@genoffice/agent-core": "*",
-    "@genoffice/ai-provider": "*",
-    "@genoffice/ai-search": "*",
-    "@genoffice/docs": "*",
-    "@genoffice/docx-engine": "*",
-    "@genoffice/electron-utils": "*",
-    "@genoffice/i18n": "*",
-    "@genoffice/pptx-engine": "*",
-    "@genoffice/pptx-render": "*",
-    "@genoffice/sheets": "*",
-    "@genoffice/slides": "*",
+    "@hermesoffice/agent-core": "*",
+    "@hermesoffice/ai-provider": "*",
+    "@hermesoffice/ai-search": "*",
+    "@hermesoffice/docs": "*",
+    "@hermesoffice/docx-engine": "*",
+    "@hermesoffice/electron-utils": "*",
+    "@hermesoffice/i18n": "*",
+    "@hermesoffice/pptx-engine": "*",
+    "@hermesoffice/pptx-render": "*",
+    "@hermesoffice/sheets": "*",
+    "@hermesoffice/slides": "*",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.4",
@@ -40,5 +40,5 @@
     "vite": "^7.3.1",
     "vitest": "^4.1.10"
   },
-  "author": "GenOffice"
+  "author": "HermesOffice"
 }

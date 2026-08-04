@@ -11,7 +11,7 @@ import type {
   TableRenderNode,
   PictureRenderNode,
   GroupRenderNode,
-} from '@genoffice/pptx-render'
+} from '@hermesoffice/pptx-render'
 import { fillToKonva, isEditableText } from './konva-adapter'
 import {
   computeSnap,

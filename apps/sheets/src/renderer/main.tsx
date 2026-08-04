@@ -1,5 +1,5 @@
 import ReactDOM from 'react-dom/client'
-import type { Lang } from '@genoffice/i18n'
+import type { Lang } from '@hermesoffice/i18n'
 
 import '@univerjs/preset-sheets-core/lib/index.css'
 

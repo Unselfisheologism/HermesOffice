@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentToolCall, AgentToolDef } from '@genoffice/agent-core'
+import type { AgentMessage, AgentToolCall, AgentToolDef } from '@hermesoffice/agent-core'
 import { httpBodyDetail } from './http-error'
 import { GENSPARK_LLM_BASE_URLS } from './providers'
 import type { AiProviderConfig, AiProviderId } from './types'

@@ -9,16 +9,16 @@ const here = dirname(fileURLToPath(import.meta.url))
 // avoids bundling stale implementations when node_modules links point elsewhere)
 const workspaceAlias = {
   // Subpath before the bare name: string aliases are prefix replacements
-  '@genoffice/pptx-engine/table-grid': resolve(
+  '@hermesoffice/pptx-engine/table-grid': resolve(
     here,
     '../../packages/pptx-engine/src/table-grid.ts',
   ),
-  '@genoffice/pptx-engine': resolve(here, '../../packages/pptx-engine/src/index.ts'),
-  '@genoffice/pptx-render': resolve(here, '../../packages/pptx-render/src/index.ts'),
+  '@hermesoffice/pptx-engine': resolve(here, '../../packages/pptx-engine/src/index.ts'),
+  '@hermesoffice/pptx-render': resolve(here, '../../packages/pptx-render/src/index.ts'),
 }
 
 export default defineConfig({
-  // Main process/preload must bundle @genoffice/* sources (they are pulled in as TS
+  // Main process/preload must bundle @hermesoffice/* sources (they are pulled in as TS
   // source with extensionless relative imports; externalizing them under Node
   // yields ERR_MODULE_NOT_FOUND).
   main: {
@@ -27,11 +27,11 @@ export default defineConfig({
     plugins: [
       externalizeDepsPlugin({
         exclude: [
-          '@genoffice/pptx-engine',
-          '@genoffice/pptx-render',
-          '@genoffice/ai-search',
-          '@genoffice/file-parse',
-          '@genoffice/electron-utils',
+          '@hermesoffice/pptx-engine',
+          '@hermesoffice/pptx-render',
+          '@hermesoffice/ai-search',
+          '@hermesoffice/file-parse',
+          '@hermesoffice/electron-utils',
           'opentype.js',
         ],
       }),

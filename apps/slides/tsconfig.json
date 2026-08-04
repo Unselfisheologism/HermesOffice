@@ -7,9 +7,9 @@
     // Pin resolution to this repo's workspace sources (avoids stale types when node_modules links point elsewhere)
     "baseUrl": ".",
     "paths": {
-      "@genoffice/pptx-engine": ["../../packages/pptx-engine/src/index.ts"],
-      "@genoffice/pptx-engine/table-grid": ["../../packages/pptx-engine/src/table-grid.ts"],
-      "@genoffice/pptx-render": ["../../packages/pptx-render/src/index.ts"]
+      "@hermesoffice/pptx-engine": ["../../packages/pptx-engine/src/index.ts"],
+      "@hermesoffice/pptx-engine/table-grid": ["../../packages/pptx-engine/src/table-grid.ts"],
+      "@hermesoffice/pptx-render": ["../../packages/pptx-render/src/index.ts"]
     }
   },
   "include": ["src", "tests", "electron.vite.config.ts", "vitest.config.ts"]
