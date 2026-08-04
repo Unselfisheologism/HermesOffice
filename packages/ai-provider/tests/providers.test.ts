@@ -4,11 +4,14 @@ import { AI_PROVIDERS, defaultAiSettings, resolveAiSettings } from '../src/provi
 describe('defaultAiSettings', () => {
   it('gives every provider its default model and an empty key by default', () => {
     const settings = defaultAiSettings()
-    expect(settings.provider).toBe('genspark')
+    // Fork: o provider nativo Hermes é o default (gateway local), não o genspark
+    expect(settings.provider).toBe('hermes')
     for (const meta of AI_PROVIDERS) {
       expect(settings.providers[meta.id].apiKey).toBe('')
       expect(settings.providers[meta.id].model).toBe(meta.defaultModel)
     }
+    // Hermes carrega a baseUrl default do gateway local
+    expect(settings.providers.hermes.baseUrl).toBe('http://127.0.0.1:8642/v1')
     expect(settings.providers.custom.baseUrl).toBe('')
     expect(settings.providers.anthropic.baseUrl).toBeUndefined()
   })
