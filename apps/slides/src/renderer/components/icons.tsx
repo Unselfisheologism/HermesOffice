@@ -1,3 +1,8 @@
+/**
+ * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
+ * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
+ * atribuição original preservada em NOTICE.
+ */
 /** Small monochrome SVG icons approximating Word's ribbon glyphs. */
 
 import type { ReactNode } from 'react'

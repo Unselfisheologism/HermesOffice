@@ -1,3 +1,8 @@
+/**
+ * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
+ * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
+ * atribuição original preservada em NOTICE.
+ */
 import type { ReactElement, ReactNode } from 'react'
 
 /// Ribbon icon set drawn to the shared icon standard: 24×24 canvas with

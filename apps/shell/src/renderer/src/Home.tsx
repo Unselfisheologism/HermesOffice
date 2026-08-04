@@ -1,3 +1,8 @@
+/**
+ * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
+ * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
+ * atribuição original preservada em NOTICE.
+ */
 import { useEffect, useRef, useState } from 'react'
 import logoLockup from './assets/hermesoffice-logo.svg'
 import iconDocx from './assets/file-docx.svg'

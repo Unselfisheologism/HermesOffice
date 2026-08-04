@@ -1,3 +1,6 @@
+# HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
+# Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
+# atribuição original preservada em NOTICE.
 #!/usr/bin/env python3
 """Troca o corpo do componente GensparkMark pelo HermesMark (badge H) em
 todos os apps (docs/sheets/slides). Mantém a assinatura (size prop) para

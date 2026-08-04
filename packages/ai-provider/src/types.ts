@@ -1,3 +1,8 @@
+/**
+ * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
+ * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
+ * atribuição original preservada em NOTICE.
+ */
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@hermesoffice/agent-core'
 
 export type AiProviderId = 'hermes' | 'genspark' | 'anthropic' | 'gemini' | 'deepseek' | 'openai' | 'custom'
