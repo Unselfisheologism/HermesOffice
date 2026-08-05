@@ -21,10 +21,11 @@ import { initialState } from './updater'
  * which clones/fetches main, rebuilds (dist:mac), swaps /Applications and
  * relaunches. Full-package policy, same as the CDN updater.
  *
- * Runs ONLY when no app-update.yml is present (i.e. builds without
- * HERMESOFFICE_UPDATE_URL — the fork's normal state). When a CDN feed is
- * baked in, the electron-updater path in updater.ts owns updates and this
- * module stays silent, so the two never race.
+ * Safety gate: this source-build updater is opt-in only via
+ * HERMESOFFICE_ENABLE_SOURCE_UPDATE=1. Normal packaged builds without a CDN
+ * feed should not try to clone/build from GitHub on end-user machines. When a
+ * CDN feed is baked in, the electron-updater path in updater.ts owns updates
+ * and this module stays silent, so the two never race.
  */
 
 const REPO_URL = 'https://github.com/criptogus/HermesOffice.git'
@@ -299,6 +300,10 @@ export function initMainUpdater(getWindow: () => BrowserWindow | null): void {
   started = true
   if (!app.isPackaged) return
   if (process.platform !== 'win32' && process.platform !== 'darwin') return
+  if (process.env.HERMESOFFICE_ENABLE_SOURCE_UPDATE !== '1') {
+    log('source updater disabled — set HERMESOFFICE_ENABLE_SOURCE_UPDATE=1 to enable')
+    return
+  }
   // CDN feed baked in? electron-updater (updater.ts) owns updates.
   if (existsSync(join(process.resourcesPath, 'app-update.yml'))) {
     log('app-update.yml present — CDN updater active, main-updater idle')
