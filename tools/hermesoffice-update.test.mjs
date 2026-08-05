@@ -44,10 +44,7 @@ test('install relaunch does not inherit ELECTRON_RUN_AS_NODE', () => {
     executable(join(bin, 'pgrep'), 'exit 1')
     executable(join(bin, 'sleep'), 'exit 0')
     executable(join(bin, 'codesign'), 'exit 0')
-    executable(
-      join(bin, 'open'),
-      `printf '%s' "\${ELECTRON_RUN_AS_NODE-unset}" > "${capture}"`,
-    )
+    executable(join(bin, 'open'), `printf '%s' "\${ELECTRON_RUN_AS_NODE-unset}" > "${capture}"`)
 
     const result = spawnSync(process.execPath, [HELPER, 'install'], {
       encoding: 'utf8',

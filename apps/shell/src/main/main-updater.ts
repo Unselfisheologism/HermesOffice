@@ -85,7 +85,10 @@ function fetchMainCommit(): Promise<string | null> {
   })
 }
 
-function spawnHelper(args: string[], onProgress: (pct: number, stage: string | null) => void): Promise<void> {
+function spawnHelper(
+  args: string[],
+  onProgress: (pct: number, stage: string | null) => void,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [helperScript(), ...args], {
       env: {
@@ -120,19 +123,27 @@ function spawnHelper(args: string[], onProgress: (pct: number, stage: string | n
     child.stdout.on('data', read)
     child.stderr.on('data', (d: Buffer) => log('helper stderr:', d.toString().trim()))
     child.on('error', reject)
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`helper ${args[0]} failed (${code})`))))
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`helper ${args[0]} failed (${code})`)),
+    )
   })
 }
 
 async function ensureSource(): Promise<void> {
   if (existsSync(join(sourceDir(), '.git'))) return
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('git', ['clone', '--filter=blob:none', '--no-checkout', REPO_URL, sourceDir()], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    })
+    const child = spawn(
+      'git',
+      ['clone', '--filter=blob:none', '--no-checkout', REPO_URL, sourceDir()],
+      {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
+    )
     child.stderr.on('data', (d: Buffer) => log('clone:', d.toString().trim()))
     child.on('error', reject)
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`git clone failed (${code})`))))
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`git clone failed (${code})`)),
+    )
   })
 }
 
@@ -176,8 +187,12 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
         pushUpdateState({ phase: 'downloading', percent: 0 })
         try {
           await ensureSource()
-          await spawnHelper(['prepare'], (pct) => pushUpdateState({ phase: 'downloading', percent: pct }))
-          await spawnHelper(['build'], (pct) => pushUpdateState({ phase: 'downloading', percent: pct }))
+          await spawnHelper(['prepare'], (pct) =>
+            pushUpdateState({ phase: 'downloading', percent: pct }),
+          )
+          await spawnHelper(['build'], (pct) =>
+            pushUpdateState({ phase: 'downloading', percent: pct }),
+          )
           pushUpdateState({ phase: 'downloaded', percent: 100 })
         } catch (err) {
           log('download/build failed:', (err as Error).message)
