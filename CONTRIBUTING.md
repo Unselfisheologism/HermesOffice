@@ -69,6 +69,53 @@ CI supplies the PR or push base automatically and checks only files changed from
 that base. This keeps the formatter gate useful without creating a repository-wide
 formatting diff.
 
+## Pre-PR testing rules
+
+These are the rules for opening a PR, not suggestions. CI enforces the
+baseline, but bugs that reach `main` ship to users through the auto-updater
+within hours — the gate lives on your machine first.
+
+1. **Run the whole gate with one command** before opening (or updating) a PR:
+
+   ```bash
+   npm run preflight   # format:check vs origin/main + lint + typecheck + npm test
+   ```
+
+   Optionally install it as a pre-push hook so a failing branch never leaves
+   your machine (`git push --no-verify` bypasses it in an emergency):
+
+   ```bash
+   npm run hooks
+   ```
+
+2. **Every behavior change ships with a test that fails without it.** Bug
+   fixes include a regression test reproducing the bug; new tools/IPC come
+   with contract tests next to the existing suites. "Tested manually" is not
+   a substitute for code the CI can rerun.
+
+3. **High-risk areas have extra obligations** (mirrored as checkboxes in the
+   PR template):
+   - _Updater/installer_: `node --check` on touched scripts, the atomic
+     verify → copy-aside → rename-swap → rollback sequence preserved, and
+     never swapping with the app process alive. Describe your manual dry-run
+     in the PR — this code cannot be fully exercised by CI, and both field
+     incidents so far came from it.
+   - _i18n_: new keys go into **all 19 locales** of the touched dictionary in
+     the same commit; there is no runtime fallback.
+   - _IPC/preload_: shared types, channel constants and preload bridges
+     change together; renderer input is validated in the main process.
+   - _Engines (open/save)_: round-trip fidelity test proving untouched
+     content survives byte-for-byte.
+   - _Renderer flows_: update or add the Playwright spec in `e2e/` covering
+     the flow you touched.
+
+4. **Don't weaken the gate to pass it.** Skipping tests, loosening types or
+   disabling lint rules to get green requires an explicit callout in the PR
+   summary and reviewer sign-off.
+
+5. **If CI is red on your PR, it is yours to fix** — push the fix or comment
+   what is blocking; never merge on red or rely on someone else noticing.
+
 ## Building installers
 
 Run these from the repository root — they regenerate the third-party
@@ -99,16 +146,16 @@ or copy an existing `target/release/xlsx-sidecar.exe` to
 None are required — the apps run with all of these unset. They exist for
 testing and local overrides:
 
-| Variable                                                 | Effect                                                                 |
-| -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Variable                                                    | Effect                                                                 |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `HERMESOFFICE_USER_DATA`                                    | Override the Electron userData directory (test isolation)              |
 | `HERMESOFFICE_LANG`                                         | Force the UI language instead of following the OS locale               |
 | `HERMESOFFICE_FAKE_UPDATE`                                  | Exercise the updater UI without a real release feed                    |
-| `HERMESOFFICE_CLOUD_SLIDE`, `HERMESOFFICE_CLOUD_SLIDE_TIER`    | Route slide generation through the cloud endpoint                      |
-| `GSK_API_KEY`, `GSK_CLI_PATH`                            | Genspark credentials / CLI location for the built-in AI provider       |
-| `AI_SEARCH_DISABLE_GSK`, `SERPER_API_KEY`                | Disable the gsk search backend / supply a Serper key instead           |
-| `XLSX_SIDECAR_PATH`, `XLSX_OPEN_PATH`, `XLSX_DEBUG_PORT` | Point at a locally built xlsx sidecar and its debug port               |
-| `*_DEV_PORT`, `*_RENDERER_URL`                           | Per-app Vite dev server ports and renderer URLs (set by `npm run dev`) |
+| `HERMESOFFICE_CLOUD_SLIDE`, `HERMESOFFICE_CLOUD_SLIDE_TIER` | Route slide generation through the cloud endpoint                      |
+| `GSK_API_KEY`, `GSK_CLI_PATH`                               | Genspark credentials / CLI location for the built-in AI provider       |
+| `AI_SEARCH_DISABLE_GSK`, `SERPER_API_KEY`                   | Disable the gsk search backend / supply a Serper key instead           |
+| `XLSX_SIDECAR_PATH`, `XLSX_OPEN_PATH`, `XLSX_DEBUG_PORT`    | Point at a locally built xlsx sidecar and its debug port               |
+| `*_DEV_PORT`, `*_RENDERER_URL`                              | Per-app Vite dev server ports and renderer URLs (set by `npm run dev`) |
 
 AI features degrade rather than break without credentials: requests surface an
 inline sign-in prompt, and web search falls back to a keyless backend.
