@@ -144,9 +144,23 @@ function verifyBundle(appPath) {
     throw new Error('bundle verification failed: unreadable build-info.json')
 }
 
-/** true while any HermesOffice GUI process is alive */
+/** PIDs of the packaged app GUI. The helper itself runs through the packaged
+ * HermesOffice binary (ELECTRON_RUN_AS_NODE), so a bare `pgrep -x HermesOffice`
+ * matches its own process — filter self out, or the wait never terminates and
+ * the termination pass below kills the helper mid-install. */
+function appPids() {
+  const p = spawnSync('pgrep', ['-x', 'HermesOffice'], { encoding: 'utf8' })
+  if (p.status !== 0) return []
+  return p.stdout
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(Number)
+    .filter((pid) => pid !== process.pid)
+}
+
 function appRunning() {
-  return spawnSync('pgrep', ['-x', 'HermesOffice'], { encoding: 'utf8' }).status === 0
+  return appPids().length > 0
 }
 
 function waitAppGone(ms) {
@@ -156,6 +170,11 @@ function waitAppGone(ms) {
     spawnSync('sleep', ['1'])
   }
   return !appRunning()
+}
+
+function killApp(force) {
+  const pids = appPids()
+  if (pids.length > 0) spawnSync('kill', [force ? '-9' : '-TERM', ...pids.map(String)])
 }
 
 function cmdInstall() {
@@ -168,10 +187,10 @@ function cmdInstall() {
   progress(97, 'waiting for app to quit')
   if (!waitAppGone(30_000)) {
     console.error('app still running after 30s — sending SIGTERM')
-    spawnSync('pkill', ['-x', 'HermesOffice'])
+    killApp(false)
     if (!waitAppGone(10_000)) {
       console.error('app ignored SIGTERM — sending SIGKILL')
-      spawnSync('pkill', ['-9', '-x', 'HermesOffice'])
+      killApp(true)
       if (!waitAppGone(5_000)) {
         throw new Error('HermesOffice is still running; refusing to swap a live bundle')
       }

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { app } from 'electron'
+import { app, Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { UpdateUiState } from '../shared/update-api'
 import { closeUpdateWindow, pushUpdateState, showUpdateWindow } from './update-window'
@@ -33,6 +33,7 @@ const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 
 let started = false
 let dismissedCommit: string | null = null
+let lastNotifiedCommit: string | null = null
 
 function log(...args: unknown[]): void {
   console.log('[main-updater]', ...args)
@@ -153,8 +154,24 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
   if (main === dismissedCommit) return
   log('update available:', built.slice(0, 7), '→', main.slice(0, 7))
 
+  // Attention in background: dock badge + bounce + system notification,
+  // once per update SHA (the modal window alone goes unnoticed when the
+  // shell is not frontmost).
+  if (main !== lastNotifiedCommit) {
+    lastNotifiedCommit = main
+    app.dock?.setBadge('1')
+    app.dock?.bounce('informational')
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'HermesOffice update available',
+        body: `${built.slice(0, 7)} → ${main.slice(0, 7)}`,
+      }).show()
+    }
+  }
+
   const actions = {
     onDownload: () => {
+      app.dock?.setBadge('')
       void (async () => {
         pushUpdateState({ phase: 'downloading', percent: 0 })
         try {
@@ -169,6 +186,7 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
       })()
     },
     onInstall: () => {
+      app.dock?.setBadge('')
       closeUpdateWindow()
       // detach: the helper waits for this process to exit, swaps the bundle
       // and relaunches via `open -n`
@@ -186,6 +204,7 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
       setImmediate(() => app.quit())
     },
     onLater: () => {
+      app.dock?.setBadge('')
       dismissedCommit = main
       closeUpdateWindow()
     },
@@ -210,6 +229,17 @@ export function initMainUpdater(getWindow: () => BrowserWindow | null): void {
   }
   setTimeout(check, FIRST_CHECK_DELAY_MS)
   setInterval(check, RECHECK_INTERVAL_MS)
+
+  // Re-surface a pending update when the user comes back to the app — the
+  // first check can fire while the shell is in the background, where a modal
+  // window goes completely unnoticed. Rate-limited: the check is a git
+  // ls-remote round-trip, no need for one per focus.
+  let lastFocusCheck = 0
+  app.on('browser-window-focus', () => {
+    if (Date.now() - lastFocusCheck < 60_000) return
+    lastFocusCheck = Date.now()
+    check()
+  })
 }
 
 /** for UpdateUiState typing parity with updater.ts */
