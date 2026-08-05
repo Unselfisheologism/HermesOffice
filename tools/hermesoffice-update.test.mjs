@@ -64,6 +64,81 @@ test('install relaunch does not inherit ELECTRON_RUN_AS_NODE', () => {
   }
 })
 
+test('check reports semantic versions (current + latest ho-v tag)', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'hermesoffice-update-test-'))
+  try {
+    const bin = join(temp, 'bin')
+    const appPath = join(temp, 'Applications', 'HermesOffice.app')
+    mkdirSync(bin, { recursive: true })
+    makeMinimalBundle(appPath)
+    writeFileSync(
+      join(appPath, 'Contents', 'Resources', 'build-info.json'),
+      JSON.stringify({ commit: 'test-commit', version: '0.4.0' }),
+    )
+    executable(
+      join(bin, 'git'),
+      `if [ "$1" = "ls-remote" ]; then
+  if echo "$*" | grep -q "refs/heads/main"; then
+    printf '%s\trefs/heads/main\n' 4444444444444444444444444444444444444444
+  else
+    printf '%s\trefs/tags/ho-v0.4.0\n' 1111111111111111111111111111111111111111
+    printf '%s\trefs/tags/ho-v0.5.0\n' 2222222222222222222222222222222222222222
+    printf '%s\trefs/tags/ho-v0.5.0^{}\n' 2222222222222222222222222222222222222222
+    printf '%s\trefs/tags/v0.5.83\n' 3333333333333333333333333333333333333333
+  fi
+  exit 0
+fi
+exit 1`,
+    )
+    const result = spawnSync(process.execPath, [HELPER, 'check'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:/usr/bin:/bin`,
+        HERMESOFFICE_APP_PATH: appPath,
+        HERMESOFFICE_REPO: 'https://example.invalid/repo.git',
+      },
+    })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    const out = JSON.parse(result.stdout)
+    assert.equal(out.currentVersion, '0.4.0')
+    assert.equal(out.latestVersion, '0.5.0')
+    assert.equal(out.latestCommit, '2222222222222222222222222222222222222222')
+    assert.equal(out.main, '4444444444444444444444444444444444444444')
+    assert.equal(out.behind, true)
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
+  }
+})
+
+test('prepare resolves npm outside the minimal PATH (fake sh reports it)', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'hermesoffice-update-test-'))
+  try {
+    const bin = join(temp, 'bin')
+    const src = join(temp, 'src')
+    const marker = join(temp, 'npm-called.txt')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(join(src, '.git'), { recursive: true })
+    // fake sh: `command -v npm` prints the fake npm (a login shell would do
+    // the same on a real machine); real npm is deliberately NOT on this PATH
+    executable(join(bin, 'sh'), `printf '%s\n' "${bin}/npm"`)
+    executable(join(bin, 'npm'), `printf 'called' > "${marker}"`)
+    executable(join(bin, 'git'), 'exit 0')
+    const result = spawnSync(process.execPath, [HELPER, 'prepare'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:/usr/bin:/bin`,
+        HERMESOFFICE_SOURCE_DIR: src,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.equal(readFileSync(marker, 'utf8'), 'called')
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
+  }
+})
+
 test('install does not wait out the poll window on its own process (pgrep self-match)', () => {
   // Regression: the helper runs through the packaged HermesOffice binary
   // (ELECTRON_RUN_AS_NODE), so `pgrep -x HermesOffice` matches the helper

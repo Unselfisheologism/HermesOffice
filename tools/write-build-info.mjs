@@ -28,9 +28,18 @@ function git(...args) {
 
 const commit = git('rev-parse', 'HEAD')
 const date = git('log', '-1', '--format=%cI')
-const version = JSON.parse(
-  await import('node:fs').then((fs) => fs.readFileSync(join(root, 'apps', 'shell', 'package.json'), 'utf8')),
-).version
+// SemVer from git describe in the fork's own tag namespace (ho-v*). The
+// upstream GenOffice tags (v0.4.110, v0.5.83, ...) are deliberately NOT
+// matched — they describe GenOffice releases, not ours. Exact tag → "0.5.0";
+// commits after a tag → "0.5.0-2-gabc1234" (SemVer prerelease form); no tag
+// yet → falls back to the package.json version.
+const version =
+  git('describe', '--tags', '--match', 'ho-v*', '--abbrev=7', '--always').replace(/^ho-v/, '') ||
+  JSON.parse(
+    await import('node:fs').then((fs) =>
+      fs.readFileSync(join(root, 'apps', 'shell', 'package.json'), 'utf8'),
+    ),
+  ).version
 
 const info = {
   commit: commit || 'unknown',

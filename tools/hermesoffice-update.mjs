@@ -33,6 +33,42 @@ const STAGE_DIR =
   process.env.HERMESOFFICE_STAGE_DIR ||
   join(homedir(), 'Library/Application Support/HermesOffice/update-stage')
 
+/** npm may live outside the minimal LaunchServices PATH (~/.hermes/node/bin,
+ * homebrew, nvm...). Resolve it once — or fail with an actionable message.
+ * A bare "npm: command not found" (spawn status 127) surfaces in the app UI
+ * as a bogus "download failed, check your network". */
+let _npmPath = null
+function npmBin() {
+  if (_npmPath) return _npmPath
+  if (process.env.HERMESOFFICE_NPM) {
+    _npmPath = process.env.HERMESOFFICE_NPM
+    return _npmPath
+  }
+  for (const shell of ['sh -lc', 'zsh -lc']) {
+    const [cmd, ...args] = shell.split(' ')
+    const found = spawnSync(cmd, [...args, 'command -v npm'], { encoding: 'utf8' })
+    if (found.status === 0 && found.stdout.trim()) {
+      _npmPath = found.stdout.trim()
+      return _npmPath
+    }
+  }
+  const candidates = [
+    join(homedir(), '.hermes', 'node', 'bin', 'npm'),
+    join(homedir(), '.homebrew', 'bin', 'npm'),
+    '/opt/homebrew/bin/npm',
+    '/usr/local/bin/npm',
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      _npmPath = p
+      return p
+    }
+  }
+  throw new Error(
+    'npm not found — add npm to PATH or install Node.js (brew install node), then retry the update',
+  )
+}
+
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
   if (r.status !== 0) {
@@ -66,6 +102,34 @@ function builtCommit(appPath = APP_PATH) {
   }
 }
 
+/** SemVer the installed app was built from (build-info.json version field) */
+function builtVersion(appPath = APP_PATH) {
+  try {
+    const p = join(appPath, 'Contents', 'Resources', 'build-info.json')
+    if (!existsSync(p)) return null
+    return JSON.parse(readFileSync(p, 'utf8')).version || null
+  } catch {
+    return null
+  }
+}
+
+/** newest ho-v* release tag on origin (SemVer), or null */
+function latestForkTag() {
+  const out = run('git', ['ls-remote', '--tags', REPO], { timeout: 30_000 })
+  let best = null
+  for (const line of out.split('\n')) {
+    const m = /^([0-9a-f]{40})\trefs\/tags\/ho-v(\d+)\.(\d+)\.(\d+)$/.exec(line.trim())
+    if (!m) continue
+    const v = [Number(m[2]), Number(m[3]), Number(m[4])]
+    const newer =
+      !best ||
+      v[0] > best.v[0] ||
+      (v[0] === best.v[0] && (v[1] > best.v[1] || (v[1] === best.v[1] && v[2] > best.v[2])))
+    if (newer) best = { v, label: `${m[2]}.${m[3]}.${m[4]}`, commit: m[1] }
+  }
+  return best
+}
+
 /** head of origin/main via the git protocol — no API token, no rate limit */
 function mainCommit() {
   const out = run('git', ['ls-remote', REPO, 'refs/heads/main'], { timeout: 30_000 })
@@ -75,14 +139,18 @@ function mainCommit() {
 function cmdCheck() {
   const current = builtCommit()
   const main = mainCommit()
+  const tag = latestForkTag()
   const behind = !!(main && current && main !== current)
   console.log(
     JSON.stringify({
       ok: true,
       current,
       currentShort: current ? current.slice(0, 7) : null,
+      currentVersion: builtVersion(),
       main,
       mainShort: main ? main.slice(0, 7) : null,
+      latestVersion: tag ? tag.label : null,
+      latestCommit: tag ? tag.commit : null,
       behind,
       updated: !!current && !!main && current === main,
     }),
@@ -98,10 +166,15 @@ function cmdPrepare() {
       timeout: 120_000,
     })
   }
+  // --tags first: the new build's version comes from `git describe` over
+  // ho-v* tags (write-build-info.mjs); without them every build describes as
+  // a bare commit SHA. The explicit `origin main` fetch afterwards guarantees
+  // FETCH_HEAD points at main (tags alone would leave it on a tag).
+  run('git', ['-C', SOURCE_DIR, 'fetch', '--quiet', '--tags', 'origin'], { timeout: 60_000 })
   run('git', ['-C', SOURCE_DIR, 'fetch', '--quiet', 'origin', 'main'], { timeout: 60_000 })
   run('git', ['-C', SOURCE_DIR, 'reset', '--hard', 'FETCH_HEAD'], { timeout: 60_000 })
   progress(25, 'npm ci')
-  run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: SOURCE_DIR, timeout: 600_000 })
+  run(npmBin(), ['ci', '--no-audit', '--no-fund'], { cwd: SOURCE_DIR, timeout: 600_000 })
   progress(35, 'deps ready')
 }
 

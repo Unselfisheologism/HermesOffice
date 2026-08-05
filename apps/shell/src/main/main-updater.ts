@@ -30,6 +30,13 @@ import { initialState } from './updater'
 const REPO_URL = 'https://github.com/criptogus/HermesOffice.git'
 const FIRST_CHECK_DELAY_MS = 15_000
 const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
+// dirs where npm commonly lives outside the minimal LaunchServices PATH
+const EXTRA_PATH_DIRS = [
+  join(homedir(), '.hermes', 'node', 'bin'),
+  join(homedir(), '.homebrew', 'bin'),
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+]
 
 let started = false
 let dismissedCommit: string | null = null
@@ -61,6 +68,18 @@ function builtCommit(): string | null {
   }
 }
 
+/** SemVer the installed app was built from (build-info.json version field) */
+function builtVersion(): string | null {
+  try {
+    const p = join(process.resourcesPath, 'build-info.json')
+    if (!existsSync(p)) return null
+    const info = JSON.parse(readFileSync(p, 'utf8'))
+    return typeof info.version === 'string' && info.version ? info.version : null
+  } catch {
+    return null
+  }
+}
+
 /** head of origin/main via the git protocol — no API token, no rate limit */
 function fetchMainCommit(): Promise<string | null> {
   return new Promise((resolve) => {
@@ -85,6 +104,37 @@ function fetchMainCommit(): Promise<string | null> {
   })
 }
 
+/** newest ho-v* release tag on origin (SemVer label + its commit), or null */
+function fetchLatestForkTag(): Promise<{ label: string; commit: string } | null> {
+  return new Promise((resolve) => {
+    const child = spawn('git', ['ls-remote', '--tags', REPO_URL], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let out = ''
+    child.stdout.on('data', (d: Buffer) => (out += d.toString()))
+    child.on('error', () => resolve(null))
+    child.on('close', (code) => {
+      if (code !== 0) {
+        log('git ls-remote --tags failed with', code)
+        resolve(null)
+        return
+      }
+      let best: { v: number[]; label: string; commit: string } | null = null
+      for (const line of out.split('\n')) {
+        const m = /^([0-9a-f]{40})\trefs\/tags\/ho-v(\d+)\.(\d+)\.(\d+)$/.exec(line.trim())
+        if (!m) continue
+        const v = [Number(m[2]), Number(m[3]), Number(m[4])]
+        const newer =
+          !best ||
+          v[0] > best.v[0] ||
+          (v[0] === best.v[0] && (v[1] > best.v[1] || (v[1] === best.v[1] && v[2] > best.v[2])))
+        if (newer) best = { v, label: `${m[2]}.${m[3]}.${m[4]}`, commit: m[1] }
+      }
+      resolve(best ? { label: best.label, commit: best.commit } : null)
+    })
+  })
+}
+
 function spawnHelper(
   args: string[],
   onProgress: (pct: number, stage: string | null) => void,
@@ -98,6 +148,11 @@ function spawnHelper(
         ELECTRON_RUN_AS_NODE: '1',
         HERMESOFFICE_SOURCE_DIR: sourceDir(),
         HERMESOFFICE_REPO: REPO_URL,
+        // LaunchServices gives apps a minimal PATH (/usr/bin:/bin:...); npm
+        // commonly lives in ~/.hermes/node/bin, homebrew or nvm dirs. Without
+        // them the helper's `npm ci` dies with "command not found" and the UI
+        // reports a bogus "check your network" error.
+        PATH: [process.env.PATH, ...EXTRA_PATH_DIRS].filter(Boolean).join(':'),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -153,17 +208,27 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
     log('no build-info.json in bundle — update check skipped')
     return
   }
+  const builtVer = builtVersion() ?? built.slice(0, 7)
   const main = await fetchMainCommit()
   if (!main) {
     log('could not reach origin/main — network offline?')
     return
   }
   if (main === built) {
-    log('up to date (', built.slice(0, 7), ')')
+    log('up to date (', builtVer, ')')
     return
   }
   if (main === dismissedCommit) return
-  log('update available:', built.slice(0, 7), '→', main.slice(0, 7))
+  // Semantic version label for the target: the newest ho-v* release tag when
+  // main sits on it, otherwise the tag plus the ahead-commit (SemVer build
+  // metadata form, e.g. "0.5.0+abc1234"); bare SHA only as last resort.
+  const tag = await fetchLatestForkTag()
+  const newVersion = tag
+    ? tag.commit === main
+      ? tag.label
+      : `${tag.label}+${main.slice(0, 7)}`
+    : main.slice(0, 7)
+  log('update available:', builtVer, '→', newVersion)
 
   // Attention in background: dock badge + bounce + system notification,
   // once per update SHA (the modal window alone goes unnoticed when the
@@ -175,7 +240,7 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
     if (Notification.isSupported()) {
       new Notification({
         title: 'HermesOffice update available',
-        body: `${built.slice(0, 7)} → ${main.slice(0, 7)}`,
+        body: `${builtVer} → ${newVersion}`,
       }).show()
     }
   }
@@ -211,6 +276,7 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
           ELECTRON_RUN_AS_NODE: '1',
           HERMESOFFICE_SOURCE_DIR: sourceDir(),
           HERMESOFFICE_REPO: REPO_URL,
+          PATH: [process.env.PATH, ...EXTRA_PATH_DIRS].filter(Boolean).join(':'),
         },
         detached: true,
         stdio: 'ignore',
@@ -225,7 +291,7 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
     },
   }
 
-  showUpdateWindow(getWindow(), initialState(main.slice(0, 7)), actions)
+  showUpdateWindow(getWindow(), initialState(newVersion), actions)
 }
 
 export function initMainUpdater(getWindow: () => BrowserWindow | null): void {
