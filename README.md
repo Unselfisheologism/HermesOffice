@@ -111,6 +111,8 @@ CJK subsets) are OFL/Apache.
 
 - **Roadmap & how to help**: [ROADMAP.md](ROADMAP.md) — good first issues are
   labeled `good first issue` in the [issues tab](https://github.com/criptogus/HermesOffice/issues).
+- **Kanban**: [HermesOffice Roadmap project](https://github.com/users/criptogus/projects/1)
+  — phases and work-in-progress at a glance.
 - **Maintainer**: [Gustavo Caetano](https://x.com/gustavocaetano) — reach out
   on X/Twitter ([@gustavocaetano](https://x.com/gustavocaetano)) for product
   direction, partnerships or just to talk agents-in-the-office.
