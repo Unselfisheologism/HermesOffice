@@ -16,6 +16,11 @@ Releases assinados do fork serão publicados aqui (em construção — use o
 [GenOffice upstream](https://github.com/genspark-ai/genoffice/releases) ou
 compile local com `npm run dist:mac`).
 
+## Roadmap
+
+Onde o produto está indo — e como a comunidade pode ajudar:
+**[ROADMAP.md](ROADMAP.md)** (visão, fases, iniciativas e áreas de contribuição).
+
 ## Apps
 
 | App           | Product              | O que é                                                                                                                                                                                                                                                                                                                                                 |
