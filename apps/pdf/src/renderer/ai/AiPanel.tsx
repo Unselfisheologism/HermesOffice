@@ -2,20 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactElement } from 'react'
 import { AgentLoop } from '@hermesoffice/agent-core'
 import type { AiSettings } from '@hermesoffice/ai-provider'
-import { AiComposer, AiTypingIndicator } from '@hermesoffice/ui'
+import { AiComposer, AiTypingIndicator, linkifyPaths } from '@hermesoffice/ui'
 import { aiLangDirective, t as tGlobal, useI18n } from '../i18n/locale'
 import { Markdown } from '@hermesoffice/ui'
-
-// Fork: converte caminhos de arquivo na resposta em links clicáveis (abrem no app)
-const FILE_PATH_RE =
-  /(?<![([])((?:\/Users\/|\/tmp\/|\/Volumes\/|file:\/\/)[^\s`'">\])]*?\.(?:docx|pdf|pptx|xlsx|doc|ppt|xls|md))/gi
-function linkifyPaths(text: string): string {
-  return text.replace(FILE_PATH_RE, (m) => {
-    const clean = m.replace(/^file:\/\//, '')
-    const name = clean.split('/').pop() ?? clean
-    return `[${name}](${clean})`
-  })
-}
 
 // Fork: convenções do agente Hermes — invocação de skills e relatórios de documentos
 const HERMES_COMMANDS = `

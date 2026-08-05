@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/core'
 import type { Block } from '@hermesoffice/docx-engine'
 import { AgentLoop, composeSkills, type AgentImage } from '@hermesoffice/agent-core'
+import { linkifyPaths } from '@hermesoffice/ui'
 import type { AiSettings, AttachmentAddResult, AttachmentMeta } from '../../shared/ipc'
 import { ATTACHMENT_IMAGE_EXTS } from '../../shared/ipc'
 import type { PmNode } from '../editor/convert'
@@ -17,17 +18,6 @@ import { DOCS_AGENT_MAX_TURNS, DOCS_CONTINUE_INSTRUCTION } from './continuation'
 import { createFilesSkill } from './files-skill'
 import { createElectronTransport } from './transport'
 import { useI18n, t as tModule, aiLangDirective, type StringKey } from '../i18n/locale'
-
-// Fork: converte caminhos de arquivo na resposta em links clicáveis (abrem no app)
-const FILE_PATH_RE =
-  /(?<![([])((?:\/Users\/|\/tmp\/|\/Volumes\/|file:\/\/)[^\s`'">\])]*?\.(?:docx|pdf|pptx|xlsx|doc|ppt|xls|md))/gi
-function linkifyPaths(text: string): string {
-  return text.replace(FILE_PATH_RE, (m) => {
-    const clean = m.replace(/^file:\/\//, '')
-    const name = clean.split('/').pop() ?? clean
-    return `[${name}](${clean})`
-  })
-}
 
 const HERMES_COMMANDS = `
 # Hermes commands
