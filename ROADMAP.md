@@ -28,6 +28,21 @@ plan, draft, verify and polish together.
   Hermes — an open, local, extensible agent platform — not from a proprietary
   cloud. The office is one surface of that platform.
 
+## Why now
+
+- **Value is migrating to the agent-tooling layer.** Office suites are
+  commoditizing; MCP (Model Context Protocol) has become the de facto standard
+  for agent-tool interoperability across major agent platforms. The category
+  being defined today is "the office where *any* agent works" — and the first
+  MCP-native office gets to shape it.
+- **Incumbents are bolting copilots onto proprietary walls.** That leaves the
+  open-standards lane open: `.docx`/`.xlsx`/`.pptx` on disk, any agent in,
+  audit trail out. The moat is not the app — it is the protocol + trust layer.
+- **The assets are mature; the window is open.** Byte-preserving OOXML
+  round-trip (the hardest part) is done. MCP adoption is at its inflection
+  point. Local-first AI is being pulled by privacy regulation (LGPD, EU AI
+  Act) and by buyers who cannot put board material into a cloud copilot.
+
 ## State of the code (honest diagnosis)
 
 **Real strengths**
@@ -54,8 +69,10 @@ plan, draft, verify and polish together.
 3. **Extensibility is not formalized.** `AgentSkill` + `composeSkills()` is a
    de facto plugin system, but compile-time only. No MCP host, no user
    scripting, no automation API.
-4. **Hermes integration is unfinished** (see `docs/hermes-integration.md`):
-   document tools exposed to the agent and a gateway launcher remain open.
+4. **The agent is still a guest, not a participant.** Health checks, the
+   gateway launcher and per-document session continuity shipped; what remains
+   open is the agent-native surface: document tools exposed via MCP, a unified
+   approval model, and agent authorship (Trusted Agent Actions track below).
 5. **Unbalanced test coverage:** engines have 50–76 test files each;
    `agent-core` (the heart of the AI) is under-covered; `slides-skill.ts`
    (3,325 lines, 33 tools) is proportionally under-covered; only a handful of
@@ -91,12 +108,27 @@ layer instead of re-engineering engines.
 | CI as a real gate (format, lint, typecheck, tests, licenses, OSV) | Every PR lands on a green, verified main | ✅ restored (Aug 2026) |
 | Public issue templates + labels (`good-first-issue`, `help-wanted`, `agent-integration`, `collaboration`, `quality`) | Community can find where to help | 🔜 planned |
 | Contribution guide matching the real merge flow | First PR is a 10-minute experience, not a mystery | 🔜 planned |
-| Hermes integration hardening (provider config, health checks, session continuity, error UX) | The agent brain "just works" on every machine | 🔄 ongoing |
+| Hermes integration hardening (provider config, health checks, session continuity, error UX) | The agent brain "just works" on every machine | 🔄 health checks + session continuity shipped; error UX pending |
 | Security posture documentation + dependency scanning in CI | Users and companies can trust the install | 🔜 planned |
 
 **Exit criteria:** a new user goes from download to first agent-assisted
 document in under 10 minutes; CI stays green ≥95% of days; ≥5 external
 contributions merged.
+
+### Track — Trusted Agent Actions
+
+> **Outcome:** *The agent stops being a chat guest and becomes an auditable,
+> approvable collaborator in every app — before any networked collaboration
+> exists.*
+
+| Initiative | Why (outcome) | Status |
+|---|---|---|
+| Unified trust model across apps | Every mutation becomes a visible, reversible proposal — the Sheets `propose_operations` gold standard extended to Docs, Slides and PDF through one `Proposed Change` contract (RFC #8) | 💡 design |
+| Agent authorship | Accepted changes are signed in the OOXML (comment or revision) with agent identity + timestamp + reasoning — the audit base for Phase 3 | 💡 ideas |
+
+**Exit criteria:** "rewrite section 3 with the data from the attached sheet"
+produces a clean diff, the user accepts, and the change is recorded as
+agent-authored — in Docs, Slides and PDF, not just Sheets.
 
 ---
 
@@ -109,14 +141,20 @@ contributions merged.
 | Initiative | Why (outcome) | Status |
 |---|---|---|
 | Full-document context | The agent reads the whole project (document + related files) via Hermes memory/RAG, not just the visible page | 💡 design |
-| Executable agent actions | The agent *edits* with preview-and-approve — extending the Docs block-patch model to Sheets, Slides and PDF | 💡 design |
 | Role-based agents per document | `@writer`, `@researcher`, `@reviewer`, `@data` — Hermes skills as office roles, invoked like teammates | 💡 ideas |
 | Project memory | Per-document conversation, decisions and state stored in Hermes sessions; resume from any machine | 🔄 in progress (session continuity shipped) |
 | Artifact generation | The agent produces real files (tables, slides, briefs) into the project, editable by humans | 💡 ideas |
-| Embedded MCP server per app | Expose the same tools as the AI panel (`read_blocks`, `replace_blocks`, `propose_operations`, slides/pdf tools) to any MCP agent — Hermes, Claude Code, whatever the community plugs in; every external mutation goes through the same proposed-change pipeline | 💡 design |
-| Agent authorship | OOXML comments and revisions signed with the agent's identity ("Hermes proposed, you accepted") — the audit base before any networked collaboration | 💡 ideas |
+| **Embedded MCP server per app — P0 keystone** | Expose the same tools as the AI panel (`read_blocks`, `replace_blocks`, `propose_operations`, slides/pdf tools) to any MCP agent — Hermes, Claude Code, whatever the community plugs in; every external mutation goes through the same proposed-change pipeline, gated by an approval policy for headless agents (approval-model RFC) | 💡 design |
+| Side-effect actions | The agent acts *beyond* the document — create task, send follow-up, file to KB — with an explicit permission model: the document as state + contract + effects | 💡 ideas |
+| Project document graph | `project-store` becomes the agent-native typed layer: document properties, cross-document references, status — never inside the OOXML (byte-preserving) | 💡 design |
 | Runtime plugin system | Evolve `AgentSkill` from compile-time to dynamic loading with a manifest and declared permissions (which tools, which scopes) | 💡 ideas |
 | **Live meeting minutes** | A meeting running on your machine becomes a live, structured `.docx` minutes doc — Granola-style, but **100% local** (see spotlight below) | 💡 design |
+
+**Sequencing:** the phase opens with one keystone demo — *an external agent
+(Claude Code or the Hermes CLI) edits a deck through the MCP server and the
+trust pipeline: policy-approved, fully audited* — and the remaining
+initiatives hang off that spine. One demo that changes minds beats nine
+features in parallel.
 
 **Exit criteria:** a user can say *"prepare the Q3 board deck from these
 numbers"* and review an agent-produced, fully editable deck — with every
@@ -187,6 +225,21 @@ full audit trail of who changed what.
 - **Cross-generation**: "turn this report into a deck" as a pipeline between
   engines, not one giant prompt.
 - Localization, accessibility, ecosystem integrations.
+
+---
+
+## Success metrics
+
+Operational metrics that complement the per-phase exit criteria (all telemetry
+is local-first, opt-in and aggregate-only):
+
+| Phase | Metric |
+|---|---|
+| 1 | download → first agent-assisted document < 10 min; CI green ≥95% of days; ≥5 external PRs merged |
+| Trusted Agent Actions | share of agent mutations accepted vs reverted (target ≥70% after the first iteration); time from opening a document to the first agent action |
+| 2 | keystone demo ships (external agent edits a deck through the trust pipeline); external MCP clients acting on real documents; artifacts generated per agent session |
+| 3 | two humans + two agents co-edit a deck live with a full audit trail |
+| 4 | features shipped by the community, outside the core team |
 
 ---
 
