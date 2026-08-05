@@ -2378,11 +2378,20 @@ export function registerAiIpc(): void {
     const controller = new AbortController()
     activeAiStreams.set(requestId, controller)
     try {
-      await streamForProvider(provider, config, system, messages, tools, maxTokens, {
-        signal: controller.signal,
-        onDelta: (text) => send({ requestId, type: 'delta', text }),
-        onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
-      }, request.sessionId)
+      await streamForProvider(
+        provider,
+        config,
+        system,
+        messages,
+        tools,
+        maxTokens,
+        {
+          signal: controller.signal,
+          onDelta: (text) => send({ requestId, type: 'delta', text }),
+          onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
+        },
+        request.sessionId,
+      )
       send({ requestId, type: 'done' })
     } catch (err) {
       if (controller.signal.aborted) {
@@ -2649,6 +2658,57 @@ export function registerProjectIpc(): void {
   /** Get the project timeline */
   ipcMain.handle('project:timeline', (_event, args: { projectId: string; limit?: number }) => {
     return getProjectStore().getProjectTimeline(args.projectId, args.limit ?? 20)
+  })
+
+  /** Save a trusted agent proposal without mutating the target document */
+  ipcMain.handle(
+    'project:proposal:save',
+    (_event, args: { change: Parameters<ProjectStore['saveProposedChange']>[0] }) => {
+      return getProjectStore().saveProposedChange(args.change)
+    },
+  )
+
+  /** Advance proposal lifecycle status */
+  ipcMain.handle(
+    'project:proposal:updateStatus',
+    (
+      _event,
+      args: {
+        projectId: string
+        proposalId: string
+        status: Parameters<ProjectStore['updateProposedChangeStatus']>[2]
+      },
+    ) => {
+      return getProjectStore().updateProposedChangeStatus(
+        args.projectId,
+        args.proposalId,
+        args.status,
+      )
+    },
+  )
+
+  /** List proposal audit records */
+  ipcMain.handle('project:proposal:list', (_event, args: { projectId: string; limit?: number }) => {
+    return getProjectStore().listProposedChanges(args.projectId, args.limit ?? 100)
+  })
+
+  /** Upsert a typed document graph edge */
+  ipcMain.handle(
+    'project:graph:upsertReference',
+    (
+      _event,
+      args: {
+        projectId: string
+        reference: Parameters<ProjectStore['upsertDocumentReference']>[1]
+      },
+    ) => {
+      return getProjectStore().upsertDocumentReference(args.projectId, args.reference)
+    },
+  )
+
+  /** List typed document graph edges */
+  ipcMain.handle('project:graph:listReferences', (_event, args: { projectId: string }) => {
+    return getProjectStore().listDocumentReferences(args.projectId)
   })
 }
 

@@ -130,6 +130,11 @@ const projectApi: ProjectApi = {
   deleteProject: (args) => ipcRenderer.invoke('project:delete', args),
   moveFile: (args) => ipcRenderer.invoke('project:moveFile', args),
   getTimeline: (args) => ipcRenderer.invoke('project:timeline', args),
+  saveProposedChange: (args) => ipcRenderer.invoke('project:proposal:save', args),
+  updateProposedChangeStatus: (args) => ipcRenderer.invoke('project:proposal:updateStatus', args),
+  listProposedChanges: (args) => ipcRenderer.invoke('project:proposal:list', args),
+  upsertDocumentReference: (args) => ipcRenderer.invoke('project:graph:upsertReference', args),
+  listDocumentReferences: (args) => ipcRenderer.invoke('project:graph:listReferences', args),
 }
 
 contextBridge.exposeInMainWorld('desktop', api)
