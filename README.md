@@ -18,7 +18,15 @@ build locally with `npm run dist:mac`).
 ## Roadmap
 
 Where the product is going — and how the community can help:
-**[ROADMAP.md](ROADMAP.md)** (vision, phases, initiatives, contribution areas).
+
+- **[ROADMAP.md](ROADMAP.md)** — vision, phases, initiatives, contribution areas.
+- **[Open issues](https://github.com/criptogus/HermesOffice/issues)** — the
+  public work queue. Features are tracked as issues with implementation notes,
+  acceptance criteria and explicit scope, so anyone can pick one up.
+- **[Good First Issues board](https://github.com/users/criptogus/projects/2)**
+  — curated entry points for new contributors: small, well-scoped tasks with a
+  clear review path. Filter by the `good first issue` label on
+  [issues](https://github.com/criptogus/HermesOffice/issues?q=label%3A%22good+first+issue%22).
 
 ## Apps
 
