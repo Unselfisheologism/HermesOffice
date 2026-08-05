@@ -174,7 +174,15 @@ function cmdPrepare() {
   run('git', ['-C', SOURCE_DIR, 'fetch', '--quiet', 'origin', 'main'], { timeout: 60_000 })
   run('git', ['-C', SOURCE_DIR, 'reset', '--hard', 'FETCH_HEAD'], { timeout: 60_000 })
   progress(25, 'npm ci')
-  run(npmBin(), ['ci', '--no-audit', '--no-fund'], { cwd: SOURCE_DIR, timeout: 600_000 })
+  // npm's shebang is `#!/usr/bin/env node` — in a minimal PATH the resolved
+  // npm is useless without its sibling node. Prepend npm's dir so both
+  // resolve (covers the LaunchServices case end to end).
+  const npm = npmBin()
+  run(npm, ['ci', '--no-audit', '--no-fund'], {
+    cwd: SOURCE_DIR,
+    timeout: 600_000,
+    env: { ...process.env, PATH: `${dirname(npm)}:${process.env.PATH || ''}` },
+  })
   progress(35, 'deps ready')
 }
 
