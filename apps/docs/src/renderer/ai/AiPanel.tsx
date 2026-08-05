@@ -20,7 +20,7 @@ import { useI18n, t as tModule, aiLangDirective, type StringKey } from '../i18n/
 
 // Fork: converte caminhos de arquivo na resposta em links clicáveis (abrem no app)
 const FILE_PATH_RE =
-  /(?<![(\[])((?:\/Users\/|\/tmp\/|\/Volumes\/|file:\/\/)[^\s`'">\]\)]*?\.(?:docx|pdf|pptx|xlsx|doc|ppt|xls|md))/gi
+  /(?<![([])((?:\/Users\/|\/tmp\/|\/Volumes\/|file:\/\/)[^\s`'">\])]*?\.(?:docx|pdf|pptx|xlsx|doc|ppt|xls|md))/gi
 function linkifyPaths(text: string): string {
   return text.replace(FILE_PATH_RE, (m) => {
     const clean = m.replace(/^file:\/\//, '')
@@ -835,7 +835,10 @@ export function AiPanel({
                 <div className="ai-msg-error">{t('aiErrorPrefix', { error: entry.error })}</div>
               )}
               {entry.loginRequired && (
-                <button className="ai-login-btn" onClick={() => void window.desktop.aiGatewayLogin()}>
+                <button
+                  className="ai-login-btn"
+                  onClick={() => void window.desktop.aiGatewayLogin()}
+                >
                   {t('aiGatewayLoginBtn')}
                 </button>
               )}

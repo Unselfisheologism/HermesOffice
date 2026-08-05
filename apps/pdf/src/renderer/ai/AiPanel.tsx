@@ -8,7 +8,7 @@ import { Markdown } from '@hermesoffice/ui'
 
 // Fork: converte caminhos de arquivo na resposta em links clicáveis (abrem no app)
 const FILE_PATH_RE =
-  /(?<![(\[])((?:\/Users\/|\/tmp\/|\/Volumes\/|file:\/\/)[^\s`'">\]\)]*?\.(?:docx|pdf|pptx|xlsx|doc|ppt|xls|md))/gi
+  /(?<![([])((?:\/Users\/|\/tmp\/|\/Volumes\/|file:\/\/)[^\s`'">\])]*?\.(?:docx|pdf|pptx|xlsx|doc|ppt|xls|md))/gi
 function linkifyPaths(text: string): string {
   return text.replace(FILE_PATH_RE, (m) => {
     const clean = m.replace(/^file:\/\//, '')

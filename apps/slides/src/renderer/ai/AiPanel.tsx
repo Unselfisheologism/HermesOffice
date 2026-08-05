@@ -1,5 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { AgentLoop, composeSkills, type AgentImage, type ToolDisplay } from '@hermesoffice/agent-core'
+import {
+  AgentLoop,
+  composeSkills,
+  type AgentImage,
+  type ToolDisplay,
+} from '@hermesoffice/agent-core'
 import type { RenderSlide } from '@hermesoffice/pptx-render'
 import type { AiSettings, AttachmentAddResult, AttachmentMeta } from '../../shared/ipc'
 import { ATTACHMENT_IMAGE_EXTS } from '../../shared/ipc'
@@ -1509,7 +1514,10 @@ export function AiPanel({
                 <div className="ai-msg-error">{t('aiMsgError', { error: entry.error })}</div>
               )}
               {entry.loginRequired && (
-                <button className="ai-login-btn" onClick={() => void window.slidesApi.aiGatewayLogin()}>
+                <button
+                  className="ai-login-btn"
+                  onClick={() => void window.slidesApi.aiGatewayLogin()}
+                >
                   {t('aiGatewayLoginBtn')}
                 </button>
               )}

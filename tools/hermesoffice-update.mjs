@@ -24,13 +24,14 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REPO = process.env.HERMESOFFICE_REPO || 'https://github.com/criptogus/HermesOffice.git'
 const APP_PATH = process.env.HERMESOFFICE_APP_PATH || '/Applications/HermesOffice.app'
-const SOURCE_DIR = process.env.HERMESOFFICE_SOURCE_DIR || join(homedir(), 'Library/Application Support/HermesOffice/update-src')
-const STAGE_DIR = process.env.HERMESOFFICE_STAGE_DIR || join(homedir(), 'Library/Application Support/HermesOffice/update-stage')
+const SOURCE_DIR =
+  process.env.HERMESOFFICE_SOURCE_DIR ||
+  join(homedir(), 'Library/Application Support/HermesOffice/update-src')
+const STAGE_DIR =
+  process.env.HERMESOFFICE_STAGE_DIR ||
+  join(homedir(), 'Library/Application Support/HermesOffice/update-stage')
 
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
@@ -93,7 +94,9 @@ function cmdPrepare() {
   if (!existsSync(join(SOURCE_DIR, '.git'))) {
     mkdirSync(dirname(SOURCE_DIR), { recursive: true })
     progress(10, 'cloning')
-    run('git', ['clone', '--filter=blob:none', '--no-checkout', REPO, SOURCE_DIR], { timeout: 120_000 })
+    run('git', ['clone', '--filter=blob:none', '--no-checkout', REPO, SOURCE_DIR], {
+      timeout: 120_000,
+    })
   }
   run('git', ['-C', SOURCE_DIR, 'fetch', '--quiet', 'origin', 'main'], { timeout: 60_000 })
   run('git', ['-C', SOURCE_DIR, 'reset', '--hard', 'FETCH_HEAD'], { timeout: 60_000 })
@@ -113,13 +116,16 @@ function cmdBuild() {
     join(releaseDir, 'mac', 'HermesOffice.app'),
   ]
   const fresh = candidates.find((c) => existsSync(c))
-  if (!fresh) throw new Error('dist:mac finished but no HermesOffice.app found in apps/shell/release')
+  if (!fresh)
+    throw new Error('dist:mac finished but no HermesOffice.app found in apps/shell/release')
 
   rmSync(STAGE_DIR, { recursive: true, force: true })
   mkdirSync(STAGE_DIR, { recursive: true })
   copyApp(fresh, join(STAGE_DIR, 'HermesOffice.app'))
   progress(95, 'staged')
-  console.log(`RESULT ${JSON.stringify({ stage: join(STAGE_DIR, 'HermesOffice.app'), commit: mainCommit() })}`)
+  console.log(
+    `RESULT ${JSON.stringify({ stage: join(STAGE_DIR, 'HermesOffice.app'), commit: mainCommit() })}`,
+  )
 }
 
 function cmdInstall() {

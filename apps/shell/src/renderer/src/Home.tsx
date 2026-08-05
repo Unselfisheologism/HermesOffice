@@ -426,7 +426,7 @@ function AccountEntry() {
   const [status, setStatus] = useState<AccountStatus | null>(null)
   const [waiting, setWaiting] = useState(false)
   // incremented on login retry, resetting the polling timer
-  const [loginNonce, setLoginNonce] = useState(0)
+  const [loginNonce] = useState(0)
   const [loginError, setLoginError] = useState<'timeout' | 'launch' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   // language flyout: opens on hover, fixed-position so it can escape the
