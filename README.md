@@ -1,11 +1,16 @@
 # HermesOffice
 
+[![CI](https://github.com/criptogus/HermesOffice/actions/workflows/ci.yml/badge.svg)](https://github.com/criptogus/HermesOffice/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+[![GitHub issues](https://img.shields.io/github/issues/criptogus/HermesOffice)](https://github.com/criptogus/HermesOffice/issues)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/criptogus/HermesOffice/issues?q=label%3A%22good+first+issue%22)
+
 AI-native office suite for macOS and Windows: word processor, spreadsheet,
 presentations and PDF — five Electron apps sharing one engine layer, built
 around AI editing as a first-class flow, not an attached chat.
 
 > **Fork of [genspark-ai/genoffice](https://github.com/genspark-ai/genoffice)**
-> (Apache-2.0). This is a *thin fork*: engine and app code follows upstream,
+> (Apache-2.0). This is a _thin fork_: engine and app code follows upstream,
 > with its own layer of identity and **Hermes Agent** (Nous Research)
 > integration as the native AI.
 
@@ -30,13 +35,13 @@ Where the product is going — and how the community can help:
 
 ## Apps
 
-| App            | Product              | What it is                                                                                                                                                                                                                                                                                                                              |
-| -------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/docs`    | **HermesOffice Docs**  | `.docx` processor. Byte-preserving round-trip: only "dirty" paragraphs are regenerated (paragraph patch); everything else in the original file stays byte-for-byte, so open/save never breaks Word layout. Paginated view whose line metrics reproduce the original layout, tracked changes, comments, styles, equations, ink.                |
-| `apps/sheets`  | **HermesOffice Sheets** | `.xlsx` spreadsheet. UI over the open-source [Univer](https://github.com/dream-num/univer) core (Apache-2.0) with an extensive custom extension layer; xlsx import/export via a Rust sidecar (calamine + IronCalc), in-house charts (Konva), pivot tables, slicers, conditional formatting and formula tracing.                              |
-| `apps/slides`  | **HermesOffice Slides** | `.pptx` presentations. In-house pptx parse/render/edit engine with masters, charts, crop, ink and text shaping (HarfBuzz metrics).                                                                                                                                                                                                        |
-| `apps/pdf`     | **HermesOffice PDF**   | PDF viewer/editor on pdf.js + pdf-lib: annotations, forms, outlines, stamps, signatures, page operations, printing.                                                                                                                                                                                                                        |
-| `apps/shell`   | **HermesOffice**       | The suite shell: home screen, tab hosting of the four editors, auto-update.                                                                                                                                                                                                                                                               |
+| App           | Product                 | What it is                                                                                                                                                                                                                                                                                                                     |
+| ------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/docs`   | **HermesOffice Docs**   | `.docx` processor. Byte-preserving round-trip: only "dirty" paragraphs are regenerated (paragraph patch); everything else in the original file stays byte-for-byte, so open/save never breaks Word layout. Paginated view whose line metrics reproduce the original layout, tracked changes, comments, styles, equations, ink. |
+| `apps/sheets` | **HermesOffice Sheets** | `.xlsx` spreadsheet. UI over the open-source [Univer](https://github.com/dream-num/univer) core (Apache-2.0) with an extensive custom extension layer; xlsx import/export via a Rust sidecar (calamine + IronCalc), in-house charts (Konva), pivot tables, slicers, conditional formatting and formula tracing.                |
+| `apps/slides` | **HermesOffice Slides** | `.pptx` presentations. In-house pptx parse/render/edit engine with masters, charts, crop, ink and text shaping (HarfBuzz metrics).                                                                                                                                                                                             |
+| `apps/pdf`    | **HermesOffice PDF**    | PDF viewer/editor on pdf.js + pdf-lib: annotations, forms, outlines, stamps, signatures, page operations, printing.                                                                                                                                                                                                            |
+| `apps/shell`  | **HermesOffice**        | The suite shell: home screen, tab hosting of the four editors, auto-update.                                                                                                                                                                                                                                                    |
 
 Every app embeds the same AI panel: block-granularity AI editing with
 snapshots and diffs in docs; an agent with tool-calling over the
@@ -46,7 +51,7 @@ spreadsheet/slides/PDF state in the others.
 Agent** — the Hermes gateway exposes an OpenAI-compatible endpoint
 (`http://127.0.0.1:8642/v1`) that runs the full agent (memory, skills, tools,
 MCP). No Genspark account, no third-party proxy: 100% local.
-*(Integration under development — see `docs/hermes-integration.md`.)*
+_(Integration under development — see `docs/hermes-integration.md`.)_
 
 ## Engine packages
 
