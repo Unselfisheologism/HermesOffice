@@ -32,7 +32,9 @@
     "notices": "node tools/gen-third-party-notices.mjs",
     "licenses": "node tools/check-licenses.mjs",
     "dist:mac": "npm run notices && npm run build:all && npm run dist:mac -w @hermesoffice/shell",
-    "dist:win": "npm run notices && npm run build:all && npm run dist:win -w @hermesoffice/shell"
+    "dist:win": "npm run notices && npm run build:all && npm run dist:win -w @hermesoffice/shell",
+    "preflight": "npm run format:check -- --base origin/main && npm run lint && npm run typecheck && npm test",
+    "hooks": "node tools/install-git-hooks.mjs"
   },
   "dependencies": {
     "ws": "^8.21.1"
