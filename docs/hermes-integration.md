@@ -43,9 +43,55 @@ curl http://127.0.0.1:8642/health   # {"status":"ok",...}
 
 HermesOffice does not start the gateway by itself — it assumes a local gateway
 is available (same machine, loopback). If the gateway is offline, the AI panel
-reports a connection error; start the gateway and try again. An optional
-launcher that ensures the gateway is running when the app opens is on the
-roadmap (see [ROADMAP.md](../ROADMAP.md)).
+reports a connection error; start the gateway and try again. On launch, the
+app offers to start the gateway when it is offline (consent-gated).
+
+## Getting started (from zero)
+
+A complete first run, from a machine without Hermes to an agent-assisted edit.
+
+1. **Install Hermes Agent.** Follow the official install guide at
+   <https://hermes-agent.nousresearch.com/docs> (any install method works —
+   the only requirement is the `hermes` CLI on your PATH).
+2. **Enable the local API server** (this is what the apps talk to):
+
+   ```bash
+   hermes config set gateway.platforms.api_server.enabled true
+   ```
+
+3. **Set the API key.** The key must live in `~/.hermes/.env`:
+
+   ```bash
+   # wrong: `hermes config set API_SERVER_KEY <key>` writes to config.yaml,
+   # which the API server does NOT read (bridged config)
+   # right:
+   hermes config unset API_SERVER_KEY   # only if you ran the wrong command
+   echo "API_SERVER_KEY=<key>" >> ~/.hermes/.env
+   ```
+
+   Pick any long random string — it is the bearer token the apps send.
+4. **Restart the gateway and check health:**
+
+   ```bash
+   hermes gateway restart
+   curl http://127.0.0.1:8642/health   # → {"status":"ok",...}
+   ```
+
+5. **Launch HermesOffice and enter the key once.** On first use the AI panel
+   asks for an API key — paste the same `API_SERVER_KEY` value. It is stored
+   in the app's `ai-settings.json` (never in the repo). If you skip it, the
+   panel replies with `Nenhuma chave de API configurada` — that is the app's
+   way of saying "no API key set", not a Hermes error.
+6. **First agent edit.** Open a `.docx`, open the AI panel and ask something
+   concrete, e.g. *"rewrite the first paragraph more concisely"*. The agent
+   streams a response; accepted edits go through the app's block-patch
+   pipeline (propose → preview → apply) and the document keeps its
+   byte-preserving round-trip. In Sheets, edits preview as operations before
+   you apply them.
+
+The gateway must be running while you use the AI panel. If it is offline, the
+panel shows a connection error — and on app launch HermesOffice offers to
+start the gateway for you (consent-gated).
 
 ## Changes vs upstream (fork layer)
 
