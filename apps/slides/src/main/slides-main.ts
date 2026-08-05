@@ -3664,6 +3664,52 @@ export function registerProjectIpc(): void {
       return { projectId: args.projectId, chatId: args.newChatId ?? args.tempChatId }
     },
   )
+
+  ipcMain.handle(
+    'project:proposal:save',
+    (_event, args: { change: Parameters<ProjectStore['saveProposedChange']>[0] }) => {
+      return getSlidesProjectStore().saveProposedChange(args.change)
+    },
+  )
+
+  ipcMain.handle(
+    'project:proposal:updateStatus',
+    (
+      _event,
+      args: {
+        projectId: string
+        proposalId: string
+        status: Parameters<ProjectStore['updateProposedChangeStatus']>[2]
+      },
+    ) => {
+      return getSlidesProjectStore().updateProposedChangeStatus(
+        args.projectId,
+        args.proposalId,
+        args.status,
+      )
+    },
+  )
+
+  ipcMain.handle('project:proposal:list', (_event, args: { projectId: string; limit?: number }) => {
+    return getSlidesProjectStore().listProposedChanges(args.projectId, args.limit ?? 100)
+  })
+
+  ipcMain.handle(
+    'project:graph:upsertReference',
+    (
+      _event,
+      args: {
+        projectId: string
+        reference: Parameters<ProjectStore['upsertDocumentReference']>[1]
+      },
+    ) => {
+      return getSlidesProjectStore().upsertDocumentReference(args.projectId, args.reference)
+    },
+  )
+
+  ipcMain.handle('project:graph:listReferences', (_event, args: { projectId: string }) => {
+    return getSlidesProjectStore().listDocumentReferences(args.projectId)
+  })
 }
 
 export function createSlidesWindow(openPath?: string | null): BrowserWindow {

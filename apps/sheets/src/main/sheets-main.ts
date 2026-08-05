@@ -2092,11 +2092,20 @@ export function registerSheetsAiIpc(): void {
     const controller = new AbortController()
     entry.aiStreams.set(requestId, controller)
     try {
-      await streamForProvider(provider, config, system, messages, tools, maxTokens, {
-        signal: controller.signal,
-        onDelta: (text) => send({ requestId, type: 'delta', text }),
-        onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
-      }, request.sessionId)
+      await streamForProvider(
+        provider,
+        config,
+        system,
+        messages,
+        tools,
+        maxTokens,
+        {
+          signal: controller.signal,
+          onDelta: (text) => send({ requestId, type: 'delta', text }),
+          onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
+        },
+        request.sessionId,
+      )
       send({ requestId, type: 'done' })
     } catch (err) {
       if (controller.signal.aborted) {
@@ -2236,6 +2245,52 @@ export function registerProjectIpc(): void {
       return { projectId: args.projectId, chatId: args.newChatId ?? args.tempChatId }
     },
   )
+
+  ipcMain.handle(
+    'project:proposal:save',
+    (_event, args: { change: Parameters<ProjectStore['saveProposedChange']>[0] }) => {
+      return getSheetsProjectStore().saveProposedChange(args.change)
+    },
+  )
+
+  ipcMain.handle(
+    'project:proposal:updateStatus',
+    (
+      _event,
+      args: {
+        projectId: string
+        proposalId: string
+        status: Parameters<ProjectStore['updateProposedChangeStatus']>[2]
+      },
+    ) => {
+      return getSheetsProjectStore().updateProposedChangeStatus(
+        args.projectId,
+        args.proposalId,
+        args.status,
+      )
+    },
+  )
+
+  ipcMain.handle('project:proposal:list', (_event, args: { projectId: string; limit?: number }) => {
+    return getSheetsProjectStore().listProposedChanges(args.projectId, args.limit ?? 100)
+  })
+
+  ipcMain.handle(
+    'project:graph:upsertReference',
+    (
+      _event,
+      args: {
+        projectId: string
+        reference: Parameters<ProjectStore['upsertDocumentReference']>[1]
+      },
+    ) => {
+      return getSheetsProjectStore().upsertDocumentReference(args.projectId, args.reference)
+    },
+  )
+
+  ipcMain.handle('project:graph:listReferences', (_event, args: { projectId: string }) => {
+    return getSheetsProjectStore().listDocumentReferences(args.projectId)
+  })
 }
 
 /**
