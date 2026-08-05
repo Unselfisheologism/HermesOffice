@@ -70,6 +70,7 @@ A complete first run, from a machine without Hermes to an agent-assisted edit.
    ```
 
    Pick any long random string — it is the bearer token the apps send.
+
 4. **Restart the gateway and check health:**
 
    ```bash
@@ -83,7 +84,7 @@ A complete first run, from a machine without Hermes to an agent-assisted edit.
    panel replies with `Nenhuma chave de API configurada` — that is the app's
    way of saying "no API key set", not a Hermes error.
 6. **First agent edit.** Open a `.docx`, open the AI panel and ask something
-   concrete, e.g. *"rewrite the first paragraph more concisely"*. The agent
+   concrete, e.g. _"rewrite the first paragraph more concisely"_. The agent
    streams a response; accepted edits go through the app's block-patch
    pipeline (propose → preview → apply) and the document keeps its
    byte-preserving round-trip. In Sheets, edits preview as operations before
