@@ -21,7 +21,7 @@ HermesOffice (docs/sheets/slides/pdf)
   `HERMES_LLM_BASE_URL` in `packages/ai-provider/src/providers.ts`).
 - **Model**: `hermes-agent` (the name advertised by the API server in `/v1/models`).
 - **Auth**: `Authorization: Bearer *** — the same key as the gateway. The key
-  lives in `ai-settings.json` in the app's userData, like other provider keys.
+lives in `ai-settings.json` in the app's userData, like other provider keys.
 
 ## Host prerequisites
 
@@ -49,14 +49,14 @@ roadmap (see [ROADMAP.md](../ROADMAP.md)).
 
 ## Changes vs upstream (fork layer)
 
-| File | Change |
-|---|---|
-| `packages/ai-provider/src/types.ts` | `AiProviderId` gains `'hermes'`; `AiProviderMeta.defaultBaseUrl` |
-| `packages/ai-provider/src/providers.ts` | `hermes` provider (default); `HERMES_LLM_BASE_URL` |
-| `packages/ai-provider/src/stream.ts` | `streamForProvider` case `hermes` (OpenAI-compatible) |
-| `packages/ai-provider/src/chat.ts` | `chatForProvider` case `hermes` (one-shot) |
-| `apps/{docs,sheets}/src/main/*.ts`, `apps/slides/src/main/ai-ipc.ts` | Provider forced `genspark` → `hermes` |
-| `apps/docs/src/renderer/ai/AiPanel.tsx` | Genspark sign-in only for `genspark` provider |
+| File                                                                 | Change                                                           |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `packages/ai-provider/src/types.ts`                                  | `AiProviderId` gains `'hermes'`; `AiProviderMeta.defaultBaseUrl` |
+| `packages/ai-provider/src/providers.ts`                              | `hermes` provider (default); `HERMES_LLM_BASE_URL`               |
+| `packages/ai-provider/src/stream.ts`                                 | `streamForProvider` case `hermes` (OpenAI-compatible)            |
+| `packages/ai-provider/src/chat.ts`                                   | `chatForProvider` case `hermes` (one-shot)                       |
+| `apps/{docs,sheets}/src/main/*.ts`, `apps/slides/src/main/ai-ipc.ts` | Provider forced `genspark` → `hermes`                            |
+| `apps/docs/src/renderer/ai/AiPanel.tsx`                              | Genspark sign-in only for `genspark` provider                    |
 
 When syncing with upstream, these are the only areas that can conflict — the
 `tools/rebrand-hermesoffice.py --check` script flags any "genoffice"
@@ -69,5 +69,5 @@ reintroduced into the code.
 - [x] Genspark sign-in hidden for the Hermes provider
 - [x] Gateway health check before streaming with a friendly "gateway offline" error
 - [x] Per-document session continuity (`X-Hermes-Session-Id` header, stable sha256 of filePath)
-- [ ] Document tools exposed to the agent (docx skills on the Hermes side)
-- [ ] Launcher that ensures the gateway is up when the app opens
+- [x] Document tools exposed to the agent — skills published in `hermes/skills/` (see `hermes/README.md`)
+- [x] Optional launcher that offers to start the gateway on app launch (consent-gated)
