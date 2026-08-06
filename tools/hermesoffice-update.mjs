@@ -162,7 +162,11 @@ function cmdPrepare() {
   if (!existsSync(join(SOURCE_DIR, '.git'))) {
     mkdirSync(dirname(SOURCE_DIR), { recursive: true })
     progress(10, 'cloning')
-    run('git', ['clone', '--filter=blob:none', '--no-checkout', REPO, SOURCE_DIR], {
+    // Full working tree — NEVER --no-checkout. The subsequent fetch/reset/npm
+    // steps need a real checkout, and the app spawns this very script from
+    // inside it; an empty checkout breaks both (ENOENT → "download failed,
+    // check your network" in the UI).
+    run('git', ['clone', '--filter=blob:none', REPO, SOURCE_DIR], {
       timeout: 120_000,
     })
   }
