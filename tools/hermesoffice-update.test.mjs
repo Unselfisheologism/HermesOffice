@@ -225,6 +225,35 @@ test('prepare fetches tags with --force and resets to origin/main (stale local t
   }
 })
 
+test('prepare pins the build to HERMESOFFICE_TARGET_REF (release-train)', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'hermesoffice-update-test-'))
+  try {
+    const bin = join(temp, 'bin')
+    const src = join(temp, 'src')
+    const gitLog = join(temp, 'git-calls.txt')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(join(src, '.git'), { recursive: true })
+    executable(join(bin, 'git'), `printf '%s\\n' "$*" >> "${gitLog}"; exit 0`)
+    executable(join(bin, 'npm'), 'exit 0')
+    const result = spawnSync(process.execPath, [HELPER, 'prepare'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:/usr/bin:/bin`,
+        HERMESOFFICE_SOURCE_DIR: src,
+        HERMESOFFICE_NPM: join(bin, 'npm'),
+        HERMESOFFICE_TARGET_REF: 'ho-v0.9.9',
+      },
+    })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    const calls = readFileSync(gitLog, 'utf8')
+    assert.match(calls, /reset --hard ho-v0\.9\.9/)
+    assert.doesNotMatch(calls, /reset --hard FETCH_HEAD|reset --hard origin\/main/)
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
+  }
+})
+
 test('install does not wait out the poll window on its own process (pgrep self-match)', () => {
   // Regression: the helper runs through the packaged HermesOffice binary
   // (ELECTRON_RUN_AS_NODE), so `pgrep -x HermesOffice` matches the helper

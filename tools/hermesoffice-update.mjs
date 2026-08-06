@@ -181,7 +181,15 @@ function cmdPrepare() {
   run('git', ['-C', SOURCE_DIR, 'fetch', '--quiet', '--tags', '--force', 'origin'], {
     timeout: 60_000,
   })
-  run('git', ['-C', SOURCE_DIR, 'reset', '--hard', 'origin/main'], { timeout: 60_000 })
+  // Release-train: HERMESOFFICE_TARGET_REF pins the build to a release tag
+  // (deterministic version); default stays on origin/main for the tagless
+  // fallback.
+  const target = process.env.HERMESOFFICE_TARGET_REF
+  run(
+    'git',
+    ['-C', SOURCE_DIR, 'reset', '--hard', target && target !== 'main' ? target : 'origin/main'],
+    { timeout: 60_000 },
+  )
   progress(25, 'npm ci')
   // npm's shebang is `#!/usr/bin/env node` — in a minimal PATH the resolved
   // npm is useless without its sibling node. Prepend npm's dir so both
