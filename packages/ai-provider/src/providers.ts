@@ -111,9 +111,11 @@ export function defaultAiSettings(
   const providers = {} as AiSettings['providers']
   for (const meta of AI_PROVIDERS) {
     providers[meta.id] = {
-      apiKey: defaultApiKeys?.[meta.id] ?? '',
+      apiKey: (defaultApiKeys && defaultApiKeys[meta.id]) || '',
       model: meta.defaultModel,
-      baseUrl: meta.needsBaseUrl ? '' : undefined,
+      // Fork: providers with a canonical local gateway get their default baseUrl
+      // (hermes → http://127.0.0.1:8642/v1), others start unset
+      baseUrl: meta.needsBaseUrl ? (meta.defaultBaseUrl ?? '') : undefined,
     }
   }
   return { provider: 'hermes', providers }

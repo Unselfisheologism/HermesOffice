@@ -12,6 +12,9 @@ export function createDocsSkill(
   getEditor: () => Editor,
   getNumIds: () => NumIds,
   getTrack?: () => AiTrack | undefined,
+  // Fork: caminho do arquivo aberto — permite ao agente editar o arquivo no
+  // disco via MCP (genoffice_docx_patch) e o app recarregar sozinho
+  getFilePath?: () => string,
 ): AgentSkill {
   return {
     id: 'docx',
@@ -20,7 +23,7 @@ export function createDocsSkill(
     buildContext: () => {
       const editor = getEditor()
       markDocSeen(editor) // the context the model receives is the freshness baseline for index-addressed writes
-      return buildDocContext(editor)
+      return buildDocContext(editor, getFilePath?.())
     },
     executeTool: (call, signal) =>
       executeTool(getEditor(), call, getNumIds(), getTrack?.(), signal),
