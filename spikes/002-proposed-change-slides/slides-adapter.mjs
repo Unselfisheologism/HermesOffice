@@ -31,11 +31,7 @@ export function elementOf(deck, slideIndex, elementId) {
 export function textSummary(el) {
   if (el.type !== 'text' && el.type !== 'shape') return null
   const paras = el.text?.paragraphs ?? []
-  return (
-    paras
-      .map((p) => (p.runs ?? []).map((r) => r.text ?? '').join(''))
-      .join(' / ') || '(empty)'
-  )
+  return paras.map((p) => (p.runs ?? []).map((r) => r.text ?? '').join('')).join(' / ') || '(empty)'
 }
 
 /** Shape-level index of a slide — the semantic preview surface. */
@@ -96,7 +92,11 @@ const OPS = {
 export function applyProposal(deck, proposal) {
   for (const op of proposal.operations) {
     if (!OPS[op.type]) throw new Error(`unknown op type: '${op.type}'`)
-    if (typeof op.slideIndex !== 'number' || op.slideIndex < 0 || op.slideIndex >= deck.deck.slides.length) {
+    if (
+      typeof op.slideIndex !== 'number' ||
+      op.slideIndex < 0 ||
+      op.slideIndex >= deck.deck.slides.length
+    ) {
       throw new Error(`slide ${op.slideIndex} out of range`)
     }
     if (op.elementId) elementOf(deck, op.slideIndex, op.elementId)

@@ -25,12 +25,12 @@ contrato cabe em Slides, cabe em Docs e PDF.
 
 ## Resultados (aceite da issue #40)
 
-| Critério | Resultado |
-|---|---|
-| 1. Mudança flui como um único `Proposed Change` tipado | ✅ `pc_*` com ops shape-level + scopes + preview + audit |
-| 2. Preview renderiza o slide com a mudança aplicada | ✅ preview semântico shape-level (índice antes/depois por slide); o render pixel-perfect fica no app via `@hermesoffice/pptx-render` (RenderTree → adapter Konva) — mesmo padrão do MCP spike |
-| 3. Reject restaura o estado anterior exatamente | ✅ reject = nada aplicado; save do deck **byte-idêntico** ao original (0 diffs em 100% das partes) |
-| 4. Time-box ≤ 2 semanas | ✅ validado em < 1 dia |
+| Critério                                               | Resultado                                                                                                                                                                                     |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Mudança flui como um único `Proposed Change` tipado | ✅ `pc_*` com ops shape-level + scopes + preview + audit                                                                                                                                      |
+| 2. Preview renderiza o slide com a mudança aplicada    | ✅ preview semântico shape-level (índice antes/depois por slide); o render pixel-perfect fica no app via `@hermesoffice/pptx-render` (RenderTree → adapter Konva) — mesmo padrão do MCP spike |
+| 3. Reject restaura o estado anterior exatamente        | ✅ reject = nada aplicado; save do deck **byte-idêntico** ao original (0 diffs em 100% das partes)                                                                                            |
+| 4. Time-box ≤ 2 semanas                                | ✅ validado em < 1 dia                                                                                                                                                                        |
 
 Byte-preservation do apply: das ~10 partes do deck, **só `ppt/slides/slide1.xml` difere**
 (texto + fill + shape adicionada + shape removida); as demais ficam byte-for-byte.
@@ -60,13 +60,13 @@ o ciclo de vida, a persistência e a superfície de preview são 100% reutilizá
 
 ## Estimativa de custo cross-app (Docs + Slides + PDF)
 
-| Peça | Docs | Slides | PDF |
-|---|---|---|---|
-| Adapter de ops (tipos + validação) | já existe (block-patch) | **feito neste spike** | ~1-2d |
-| Preview semântico | diff de blocos (existe) | descriptor shape-level (feito) | página/raster → ~2-3d |
-| Wiring trust UX (propose→preview→accept) | ~2-3d | ~2-3d | ~2-3d |
-| Audit + rollback | ~1d | ~1d | ~1d |
-| **Total** | **~4-6d** | **~3-4d** | **~6-8d** |
+| Peça                                     | Docs                    | Slides                         | PDF                   |
+| ---------------------------------------- | ----------------------- | ------------------------------ | --------------------- |
+| Adapter de ops (tipos + validação)       | já existe (block-patch) | **feito neste spike**          | ~1-2d                 |
+| Preview semântico                        | diff de blocos (existe) | descriptor shape-level (feito) | página/raster → ~2-3d |
+| Wiring trust UX (propose→preview→accept) | ~2-3d                   | ~2-3d                          | ~2-3d                 |
+| Audit + rollback                         | ~1d                     | ~1d                            | ~1d                   |
+| **Total**                                | **~4-6d**               | **~3-4d**                      | **~6-8d**             |
 
 **Recomendação**: a promessa cross-app pode ser feita publicamente. Ordem de
 execução sugerida: **Slides primeiro** (adapter já validado → vira o template),

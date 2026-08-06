@@ -64,18 +64,35 @@ async function main() {
   const lastEl = slide0.elements[slide0.elements.length - 1]
   const beforeText = textSummary(firstText)
   const removedText = textSummary(lastEl)
-  console.log(`targets: element '${firstText.id}' (text: "${beforeText}"), last: '${lastEl.id}' (text: "${removedText}")`)
+  console.log(
+    `targets: element '${firstText.id}' (text: "${beforeText}"), last: '${lastEl.id}' (text: "${removedText}")`,
+  )
 
   // ── propose: text edit + style change + add shape + remove shape ──
   const ops = [
-    { type: 'set_shape_text', slideIndex: 0, elementId: firstText.id, text: 'Spike 40 — Proposed Change applied' },
+    {
+      type: 'set_shape_text',
+      slideIndex: 0,
+      elementId: firstText.id,
+      text: 'Spike 40 — Proposed Change applied',
+    },
     {
       type: 'set_shape_style',
       slideIndex: 0,
       elementId: firstText.id,
       fill: { type: 'solid', color: 'FFC000' },
     },
-    { type: 'add_shape', slideIndex: 0, kind: 'roundRect', x: 720000, y: 4500000, w: 4800000, h: 600000, text: 'agent-added shape', fillColor: '70AD47' },
+    {
+      type: 'add_shape',
+      slideIndex: 0,
+      kind: 'roundRect',
+      x: 720000,
+      y: 4500000,
+      w: 4800000,
+      h: 600000,
+      text: 'agent-added shape',
+      fillColor: '70AD47',
+    },
     { type: 'remove_shape', slideIndex: 0, elementId: lastEl.id },
   ]
   const preview = buildPreview(deck, ops)
@@ -102,6 +119,7 @@ async function main() {
   writeFileSync(OUTPUT, outBytes)
   const appliedFile = persist(proposal)
   console.log(`\n[applied] ${proposal.id} → ${OUTPUT} (${outBytes.length} bytes)`)
+  console.log(`  audit: ${appliedFile}`)
 
   // ── verify ──
   const origEntries = await zipEntries(inputBytes)
@@ -109,15 +127,23 @@ async function main() {
   const diffs = bytePreservationReport(origEntries, newEntries)
   console.log(`\n== Byte-preservation (${Object.keys(origEntries).length} zip parts) ==`)
   for (const d of diffs) console.log(`  ~ ${d}`)
-  assert(diffs.every((d) => d.startsWith('ppt/slides/slide1.xml')), 'only the edited slide part (slide1.xml) differs')
+  assert(
+    diffs.every((d) => d.startsWith('ppt/slides/slide1.xml')),
+    'only the edited slide part (slide1.xml) differs',
+  )
 
   const reopened = await openDeck(outBytes)
   const reopenedEls = reopened.deck.slides[0].elements
-  console.log(`  reopened slide 0: ${reopenedEls.length} elements (ids: ${reopenedEls.map((e) => e.id).join(', ')})`)
+  console.log(
+    `  reopened slide 0: ${reopenedEls.length} elements (ids: ${reopenedEls.map((e) => e.id).join(', ')})`,
+  )
   const edited = reopenedEls.find((e) => textSummary(e) === 'Spike 40 — Proposed Change applied')
   assert(edited, 'text edit landed and re-parses (found by content)')
   console.log(`  edited element fill after re-parse: ${JSON.stringify(edited?.fill ?? null)}`)
-  assert(edited?.fill != null && edited.fill.color != null, 'style change (fill) landed and re-parses')
+  assert(
+    edited?.fill != null && edited.fill.color != null,
+    'style change (fill) landed and re-parses',
+  )
   assert(
     reopenedEls.some((e) => e.text?.paragraphs?.[0]?.runs?.[0]?.text === 'agent-added shape'),
     'added shape present after re-parse',
@@ -129,8 +155,14 @@ async function main() {
 
   // audit record survives reload in RFC #8 shape
   const reloaded = load(PROJECT, proposal.id)
-  assert(reloaded.status === 'applied' && reloaded.actor.kind === 'agent', 'audit record reloads with final state')
-  assert(Array.isArray(reloaded.operations) && reloaded.operations.length === 4, 'audit keeps the typed operations')
+  assert(
+    reloaded.status === 'applied' && reloaded.actor.kind === 'agent',
+    'audit record reloads with final state',
+  )
+  assert(
+    Array.isArray(reloaded.operations) && reloaded.operations.length === 4,
+    'audit keeps the typed operations',
+  )
 
   // ── reject path: nothing applied → save must be byte-identical ──
   console.log(`\n== Reject path ==`)
@@ -139,8 +171,12 @@ async function main() {
     projectId: PROJECT,
     actor: { id: 'spike40-harness', kind: 'agent' },
     summary: 'Reject path: single text edit',
-    operations: [{ type: 'set_shape_text', slideIndex: 0, elementId: firstText.id, text: 'must not land' }],
-    preview: buildPreview(deck2, [{ type: 'set_shape_text', slideIndex: 0, elementId: firstText.id }]),
+    operations: [
+      { type: 'set_shape_text', slideIndex: 0, elementId: firstText.id, text: 'must not land' },
+    ],
+    preview: buildPreview(deck2, [
+      { type: 'set_shape_text', slideIndex: 0, elementId: firstText.id },
+    ]),
   })
   transition(p2, 'proposed')
   transition(p2, 'rejected', 'user declined')
@@ -151,7 +187,9 @@ async function main() {
   console.log(`  audit: ${proposalDirPath(PROJECT, p2.id)}`)
 
   console.log(`\n✅ SPIKE 40 PASSED — Proposed Change contract fits Slides`)
-  console.log(`   verdict: shape-level ops + dirty-flag apply + per-part byte-preservation + RFC #8 audit`)
+  console.log(
+    `   verdict: shape-level ops + dirty-flag apply + per-part byte-preservation + RFC #8 audit`,
+  )
 }
 
 function proposalDirPath(projectId, proposalId) {
