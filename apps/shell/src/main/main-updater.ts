@@ -188,13 +188,13 @@ function spawnHelper(
 async function ensureSource(): Promise<void> {
   if (existsSync(join(sourceDir(), '.git'))) return
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      'git',
-      ['clone', '--filter=blob:none', '--no-checkout', REPO_URL, sourceDir()],
-      {
-        stdio: ['ignore', 'ignore', 'pipe'],
-      },
-    )
+    // Full working tree — NEVER --no-checkout. The helper script
+    // (tools/hermesoffice-update.mjs) lives inside the checkout and is spawned
+    // right after this clone; with an empty checkout the spawn fails with
+    // ENOENT and the UI reports a bogus "download failed, check your network".
+    const child = spawn('git', ['clone', '--filter=blob:none', REPO_URL, sourceDir()], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
     child.stderr.on('data', (d: Buffer) => log('clone:', d.toString().trim()))
     child.on('error', reject)
     child.on('close', (code) =>
@@ -209,7 +209,7 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
     log('no build-info.json in bundle — update check skipped')
     return
   }
-  const builtVer = builtVersion() ?? built.slice(0, 7)
+  const builtVer = builtVersion() ?? `build ${built.slice(0, 7)}`
   const main = await fetchMainCommit()
   if (!main) {
     log('could not reach origin/main — network offline?')
@@ -222,13 +222,15 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
   if (main === dismissedCommit) return
   // Semantic version label for the target: the newest ho-v* release tag when
   // main sits on it, otherwise the tag plus the ahead-commit (SemVer build
-  // metadata form, e.g. "0.5.0+abc1234"); bare SHA only as last resort.
+  // metadata form, e.g. "0.5.0+abc1234"). When no tag exists at all, label the
+  // value explicitly as a build — a bare SHA is not a version, and presenting
+  // it as one is what produced the misleading "v0.4.0 → v93a7024" display.
   const tag = await fetchLatestForkTag()
   const newVersion = tag
     ? tag.commit === main
       ? tag.label
       : `${tag.label}+${main.slice(0, 7)}`
-    : main.slice(0, 7)
+    : `build ${main.slice(0, 7)}`
   log('update available:', builtVer, '→', newVersion)
 
   // Attention in background: dock badge + bounce + system notification,
