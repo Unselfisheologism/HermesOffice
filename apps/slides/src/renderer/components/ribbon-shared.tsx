@@ -3,7 +3,7 @@
  * small layout components, and the RibbonTabCtx bundle handed to the
  * extracted tab components.
  */
-import type { Dispatch, ReactNode, SetStateAction } from 'react'
+import type { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction } from 'react'
 import type {
   AnimEffectKind,
   AnimTrigger,
@@ -14,7 +14,8 @@ import type {
   TransitionKind,
 } from '../../shared/ipc'
 import type { InkPenSettings, InkTool } from '../ink'
-import type { ChartPresetDef, IconDef, SmartArtDef, WordArtPreset } from '../insert-presets'
+import type { WordArtPreset } from '@hermesoffice/ui'
+import type { ChartPresetDef, IconDef, SmartArtDef } from '../insert-presets'
 import type { SlideThemePreset } from '../themes'
 import type { ChartStyleInfo } from '@hermesoffice/pptx-render'
 import { useI18n } from '../i18n/locale'
@@ -115,6 +116,40 @@ export function RbCaret() {
   )
 }
 
+/** Every ribbon popup that participates in "one popup at a time". */
+export type RibbonPanelKey =
+  | 'file'
+  | 'color'
+  | 'font'
+  | 'size'
+  | 'lineSpacing'
+  | 'para'
+  | 'layoutPick'
+  | 'slideSize'
+  | 'transparency'
+  | 'table'
+  | 'layout'
+  | 'translate'
+  | 'arrange'
+  | 'insert'
+  | 'chart'
+  | 'collapse'
+  | 'pen'
+  | 'slideShow'
+
+/** Ribbon popups are mutually exclusive: a trigger closes every sibling popup
+ *  on mousedown, before its own click-toggle runs. A trigger rendered inside
+ *  another popup (collapse flyout, paragraph panel) keeps its anchor open —
+ *  closing it would unmount the popup being opened. */
+export function closeSiblingPanels(
+  e: ReactMouseEvent<HTMLElement>,
+  closePanels: (keep: RibbonPanelKey[]) => void,
+  own: RibbonPanelKey,
+): void {
+  const nested = e.currentTarget.closest('.rb-drop') != null
+  closePanels(nested ? [own, 'collapse', 'para'] : [own])
+}
+
 export function Group({
   label,
   children,
@@ -195,6 +230,8 @@ export interface Props {
   onAiPreset: (text: string, opts?: { slideShot?: boolean }) => void
   /** Insert an element on the current page */
   onInsert: (kind: InsertKind) => void
+  /** Shape gallery pick: enter canvas draw mode (crosshair; click = default size, drag = custom, Esc cancels) */
+  onPickShape: (kind: InsertKind) => void
   /** Open the image picker dialog and insert into the current page */
   onInsertImage: () => void
   /** Set the page background solid color; allSlides=true applies to all pages */
@@ -246,6 +283,8 @@ export interface Props {
   curFontSizePt: number | null
   /** Mixed selection font sizes (shown as "min+") */
   curFontSizeMixed?: boolean
+  /** Current bullet char of the selection for the bullet gallery ('' = no bullet; null = mixed/unknown, nothing highlighted) */
+  curBulletChar: string | null
   /** Editing: change the selection's font / set size (pt) */
   onFontFamily: (family: string) => void
   onFontSize: (pt: number) => void
@@ -372,6 +411,8 @@ export interface Props {
   /** Document page count / current page (for the Zoom dropdown) */
   slideCount: number
   currentSlide: number
+  /** Current slide's solid background color (undefined = gradient/image/none); syncs the Design tab swatch */
+  currentBgColor?: string
   /** Open the header & footer dialog */
   onOpenHeaderFooter: () => void
   /** Open the equation dialog */
@@ -438,6 +479,7 @@ export interface RibbonTabCtx extends Pick<
   | 'brushMode'
   | 'canDistribute'
   | 'canPaste'
+  | 'curBulletChar'
   | 'curFontFamily'
   | 'curFontSizeMixed'
   | 'curFontSizePt'
@@ -467,6 +509,7 @@ export interface RibbonTabCtx extends Pick<
   | 'onFormatBrushClick'
   | 'onFormatBrushDoubleClick'
   | 'onInsert'
+  | 'onPickShape'
   | 'onInsertChart'
   | 'onInsertField'
   | 'onInsertIcon'
@@ -485,6 +528,7 @@ export interface RibbonTabCtx extends Pick<
   | 'onPaste'
   | 'onResetLayout'
   | 'onSetLayout'
+  | 'onSlideShow'
   | 'onStrike'
   | 'onTextColor'
   | 'onTextToggle'
@@ -496,6 +540,7 @@ export interface RibbonTabCtx extends Pick<
   | 'zoom'
 > {
   arrangeOpen: boolean
+  closePanels: (keep: RibbonPanelKey[]) => void
   collapseOpen: string | null
   collapsedGroups: string[]
   colorOpen: boolean
@@ -536,11 +581,16 @@ export interface RibbonTabCtx extends Pick<
   setParaOpen: Dispatch<SetStateAction<boolean>>
   setSizeDraft: Dispatch<SetStateAction<string | null>>
   setSizeOpen: Dispatch<SetStateAction<boolean>>
+  setSlideShowFromStart: Dispatch<SetStateAction<boolean>>
+  setSlideShowOpen: Dispatch<SetStateAction<boolean>>
   setTableCustom: Dispatch<SetStateAction<{ r: number; c: number }>>
   setTableHover: Dispatch<SetStateAction<{ r: number; c: number }>>
   setTableOpen: Dispatch<SetStateAction<boolean>>
   sizeDraft: string | null
   sizeOpen: boolean
+  /** Home-tab split button memory: the last chosen start mode (true = from beginning) */
+  slideShowFromStart: boolean
+  slideShowOpen: boolean
   t: ReturnType<typeof useI18n>['t']
   tableCustom: { r: number; c: number }
   tableHover: { r: number; c: number }

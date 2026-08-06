@@ -1,8 +1,3 @@
-/**
- * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
- * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
- * atribuição original preservada em NOTICE.
- */
 import { createHash, randomUUID } from 'node:crypto'
 import {
   createReadStream,
@@ -21,11 +16,14 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
+  screen,
   session as electronSession,
   shell,
+  systemPreferences,
   WebContentsView,
 } from 'electron'
 import type {
@@ -36,11 +34,23 @@ import type {
   WebContents,
 } from 'electron'
 import { z } from 'zod'
-import { installNavigationGuard, safeExternalUrl } from '@hermesoffice/electron-utils'
+import {
+  appMenuLabels,
+  contextMenuLabels,
+  installContextMenu,
+  installNavigationGuard,
+  safeExternalUrl,
+  showOpenDialogWithMemory,
+  showSaveDialogWithMemory,
+  viewMenuTemplate,
+  windowMenuTemplate,
+} from '@hermesoffice/electron-utils'
 import { createI18n, getUiLang, type Lang, normalizeLang, setUiLang } from '@hermesoffice/i18n'
 import { ProjectStore } from '@hermesoffice/project-store'
 
 import {
+  AiCreditsError,
+  AiTimeoutError,
   chatForProvider,
   defaultAiSettings,
   resolveAiSettings,
@@ -53,10 +63,11 @@ import {
 } from '@hermesoffice/ai-provider'
 import { csvToXlsxBuffer, decodeCsvBuffer } from '../gateway/csv-import'
 import {
+  ensureGenofficeLogin,
   gskApiKey,
-  gskLogin,
   gskLoginInfo,
   hasGskAuth,
+  setGskProxyUrl,
   webSearch,
   imageSearch,
 } from '@hermesoffice/ai-search'
@@ -87,6 +98,9 @@ import {
   workbookPivotRequestSchema,
   localImageRequestSchema,
   localImageResultSchema,
+  screenCaptureRequestSchema,
+  screenCaptureResultSchema,
+  screenSourcesResultSchema,
   workbookPivotDefinitionSchema,
   workbookExportPdfRequestSchema,
   workbookRangeRequestSchema,
@@ -123,7 +137,7 @@ const tMain = createI18n({
     errParseFailed: '文件解析失败',
     errImageNoText: '图片附件不提供文本,已作为图像随用户消息发送,直接看图即可',
     errNotImage: '不是支持的图片类型',
-    errGskNotLoggedIn: '未登录 Hermes:请点击下方「登录 Hermes」完成登录后重试',
+    errGskNotLoggedIn: '未登录 Genspark:请点击下方「登录 Genspark」完成登录后重试',
     errNoApiKey: '未配置 {provider} 的 API Key',
     errNoModel: '未配置模型名称',
     errImgAbsPath: '图片路径必须是绝对路径。',
@@ -167,7 +181,7 @@ const tMain = createI18n({
     errImageNoText: 'Image attachments have no text; the image is sent along with the user message',
     errNotImage: 'not a supported image type',
     errGskNotLoggedIn:
-      'Not signed in to Hermes: click “Sign in to Hermes” below, sign in, then retry',
+      'Not signed in to Genspark: click “Sign in to Genspark” below, sign in, then retry',
     errNoApiKey: 'No API key configured for {provider}',
     errNoModel: 'No model name configured',
     errImgAbsPath: 'Image path must be absolute.',
@@ -213,7 +227,7 @@ const tMain = createI18n({
       '画像添付にはテキストがありません。画像はユーザー メッセージと一緒に送信されるため、そのまま画像をご確認ください',
     errNotImage: 'サポートされていない画像形式です',
     errGskNotLoggedIn:
-      'Hermes にサインインしていません。下の「Hermes にサインイン」からサインインして再試行してください',
+      'Genspark にサインインしていません。下の「Genspark にサインイン」からサインインして再試行してください',
     errNoApiKey: '{provider} の API キーが設定されていません',
     errNoModel: 'モデル名が設定されていません',
     errImgAbsPath: '画像パスは絶対パスで指定してください。',
@@ -260,7 +274,7 @@ const tMain = createI18n({
       '이미지 첨부에는 텍스트가 없습니다. 이미지는 사용자 메시지와 함께 전송되므로 이미지를 직접 확인하세요',
     errNotImage: '지원되는 이미지 형식이 아닙니다',
     errGskNotLoggedIn:
-      'Hermes에 로그인되어 있지 않습니다. 아래 "Hermes 로그인"을 눌러 로그인한 뒤 다시 시도하세요',
+      'Genspark에 로그인되어 있지 않습니다. 아래 "Genspark 로그인"을 눌러 로그인한 뒤 다시 시도하세요',
     errNoApiKey: '{provider}의 API 키가 설정되지 않았습니다',
     errNoModel: '모델 이름이 설정되지 않았습니다',
     errImgAbsPath: '이미지 경로는 절대 경로여야 합니다.',
@@ -308,7 +322,7 @@ const tMain = createI18n({
       "Les images jointes n'ont pas de texte ; l'image est envoyée avec le message de l'utilisateur",
     errNotImage: "type d'image non pris en charge",
     errGskNotLoggedIn:
-      'Non connecté à Hermes : cliquez sur « Se connecter à Hermes » ci-dessous, connectez-vous puis réessayez',
+      'Non connecté à Genspark : cliquez sur « Se connecter à Genspark » ci-dessous, connectez-vous puis réessayez',
     errNoApiKey: 'Aucune clé API configurée pour {provider}',
     errNoModel: 'Aucun nom de modèle configuré',
     errImgAbsPath: "Le chemin de l'image doit être absolu.",
@@ -356,7 +370,7 @@ const tMain = createI18n({
       'Bildanlagen enthalten keinen Text; das Bild wird zusammen mit der Benutzernachricht gesendet',
     errNotImage: 'kein unterstützter Bildtyp',
     errGskNotLoggedIn:
-      'Nicht bei Hermes angemeldet: Klicken Sie unten auf „Bei Hermes anmelden“, melden Sie sich an und versuchen Sie es erneut',
+      'Nicht bei Genspark angemeldet: Klicken Sie unten auf „Bei Genspark anmelden“, melden Sie sich an und versuchen Sie es erneut',
     errNoApiKey: 'Kein API-Schlüssel für {provider} konfiguriert',
     errNoModel: 'Kein Modellname konfiguriert',
     errImgAbsPath: 'Der Bildpfad muss absolut sein.',
@@ -404,7 +418,7 @@ const tMain = createI18n({
       'Las imágenes adjuntas no tienen texto; la imagen se envía junto con el mensaje del usuario',
     errNotImage: 'no es un tipo de imagen compatible',
     errGskNotLoggedIn:
-      'No has iniciado sesión en Hermes: pulsa «Iniciar sesión en Hermes» abajo, inicia sesión y vuelve a intentarlo',
+      'No has iniciado sesión en Genspark: pulsa «Iniciar sesión en Genspark» abajo, inicia sesión y vuelve a intentarlo',
     errNoApiKey: 'No hay clave de API configurada para {provider}',
     errNoModel: 'No hay nombre de modelo configurado',
     errImgAbsPath: 'La ruta de la imagen debe ser absoluta.',
@@ -451,7 +465,7 @@ const tMain = createI18n({
       'รูปภาพแนบไม่มีข้อความ รูปภาพจะถูกส่งไปพร้อมข้อความของผู้ใช้ ให้ดูที่รูปภาพโดยตรง',
     errNotImage: 'ไม่ใช่ชนิดรูปภาพที่รองรับ',
     errGskNotLoggedIn:
-      'ยังไม่ได้ลงชื่อเข้าใช้ Hermes: แตะ “ลงชื่อเข้าใช้ Hermes” ด้านล่าง แล้วลองอีกครั้ง',
+      'ยังไม่ได้ลงชื่อเข้าใช้ Genspark: แตะ “ลงชื่อเข้าใช้ Genspark” ด้านล่าง แล้วลองอีกครั้ง',
     errNoApiKey: 'ยังไม่ได้ตั้งค่า API Key ของ {provider}',
     errNoModel: 'ยังไม่ได้กำหนดชื่อโมเดล',
     errImgAbsPath: 'เส้นทางรูปภาพต้องเป็นเส้นทางแบบสัมบูรณ์',
@@ -495,7 +509,7 @@ const tMain = createI18n({
     errParseFailed: 'Gagal mengurai file',
     errImageNoText: 'Lampiran gambar tidak memiliki teks; gambar dikirim bersama pesan pengguna',
     errNotImage: 'bukan jenis gambar yang didukung',
-    errGskNotLoggedIn: 'Belum masuk ke Hermes: klik “Masuk ke Hermes” di bawah, lalu coba lagi',
+    errGskNotLoggedIn: 'Belum masuk ke Genspark: klik “Masuk ke Genspark” di bawah, lalu coba lagi',
     errNoApiKey: 'API Key untuk {provider} belum dikonfigurasi',
     errNoModel: 'Nama model belum dikonfigurasi',
     errImgAbsPath: 'Jalur gambar harus berupa jalur absolut.',
@@ -542,7 +556,7 @@ const tMain = createI18n({
       'Вложенные изображения не содержат текста; изображение отправляется вместе с сообщением пользователя',
     errNotImage: 'неподдерживаемый тип изображения',
     errGskNotLoggedIn:
-      'Вы не вошли в Hermes: нажмите «Войти в Hermes» ниже, войдите и повторите попытку',
+      'Вы не вошли в Genspark: нажмите «Войти в Genspark» ниже, войдите и повторите попытку',
     errNoApiKey: 'API-ключ для {provider} не настроен',
     errNoModel: 'Имя модели не настроено',
     errImgAbsPath: 'Путь к изображению должен быть абсолютным.',
@@ -588,7 +602,7 @@ const tMain = createI18n({
     errImageNoText: 'مرفقات الصور لا تحتوي على نص؛ تُرسل الصورة مع رسالة المستخدم',
     errNotImage: 'نوع صورة غير مدعوم',
     errGskNotLoggedIn:
-      'لم تسجّل الدخول إلى Hermes: انقر على «تسجيل الدخول إلى Hermes» أدناه ثم أعد المحاولة',
+      'لم تسجّل الدخول إلى Genspark: انقر على «تسجيل الدخول إلى Genspark» أدناه ثم أعد المحاولة',
     errNoApiKey: 'لم يتم تكوين مفتاح API لـ {provider}',
     errNoModel: 'لم يتم تكوين اسم النموذج',
     errImgAbsPath: 'يجب أن يكون مسار الصورة مسارًا مطلقًا.',
@@ -634,7 +648,7 @@ const tMain = createI18n({
       'Anexos de imagem não têm texto; a imagem é enviada junto com a mensagem do usuário',
     errNotImage: 'não é um tipo de imagem suportado',
     errGskNotLoggedIn:
-      'Não conectado ao Hermes: clique em “Entrar no Hermes” abaixo, entre e tente novamente',
+      'Não conectado ao Genspark: clique em “Entrar no Genspark” abaixo, entre e tente novamente',
     errNoApiKey: 'Nenhuma chave de API configurada para {provider}',
     errNoModel: 'Nenhum nome de modelo configurado',
     errImgAbsPath: 'O caminho da imagem deve ser absoluto.',
@@ -681,7 +695,7 @@ const tMain = createI18n({
       "Gli allegati immagine non hanno testo; l'immagine viene inviata insieme al messaggio dell'utente",
     errNotImage: 'tipo di immagine non supportato',
     errGskNotLoggedIn:
-      'Accesso a Hermes non effettuato: fai clic su “Accedi a Hermes” qui sotto, accedi e riprova',
+      'Accesso a Genspark non effettuato: fai clic su “Accedi a Genspark” qui sotto, accedi e riprova',
     errNoApiKey: 'Nessuna chiave API configurata per {provider}',
     errNoModel: 'Nessun nome di modello configurato',
     errImgAbsPath: "Il percorso dell'immagine deve essere assoluto.",
@@ -729,7 +743,7 @@ const tMain = createI18n({
       'Załączniki graficzne nie zawierają tekstu; obraz jest wysyłany razem z wiadomością użytkownika',
     errNotImage: 'nieobsługiwany typ obrazu',
     errGskNotLoggedIn:
-      'Nie zalogowano do Hermes: kliknij „Zaloguj się do Hermes” poniżej, zaloguj się i spróbuj ponownie',
+      'Nie zalogowano do Genspark: kliknij „Zaloguj się do Genspark” poniżej, zaloguj się i spróbuj ponownie',
     errNoApiKey: 'Nie skonfigurowano klucza API dla {provider}',
     errNoModel: 'Nie skonfigurowano nazwy modelu',
     errImgAbsPath: 'Ścieżka obrazu musi być bezwzględna.',
@@ -776,7 +790,7 @@ const tMain = createI18n({
       'Afbeeldingsbijlagen bevatten geen tekst; de afbeelding wordt samen met het gebruikersbericht verzonden',
     errNotImage: 'geen ondersteund afbeeldingstype',
     errGskNotLoggedIn:
-      'Niet aangemeld bij Hermes: klik hieronder op “Aanmelden bij Hermes”, meld u aan en probeer het opnieuw',
+      'Niet aangemeld bij Genspark: klik hieronder op “Aanmelden bij Genspark”, meld u aan en probeer het opnieuw',
     errNoApiKey: 'Geen API-sleutel geconfigureerd voor {provider}',
     errNoModel: 'Geen modelnaam geconfigureerd',
     errImgAbsPath: 'Het afbeeldingspad moet absoluut zijn.',
@@ -823,7 +837,7 @@ const tMain = createI18n({
     errImageNoText: 'Lampiran imej tiada teks; imej dihantar bersama mesej pengguna',
     errNotImage: 'bukan jenis imej yang disokong',
     errGskNotLoggedIn:
-      'Belum log masuk ke Hermes: klik “Log masuk ke Hermes” di bawah, kemudian cuba lagi',
+      'Belum log masuk ke Genspark: klik “Log masuk ke Genspark” di bawah, kemudian cuba lagi',
     errNoApiKey: 'Kunci API untuk {provider} belum dikonfigurasikan',
     errNoModel: 'Nama model belum dikonfigurasikan',
     errImgAbsPath: 'Laluan imej mestilah laluan mutlak.',
@@ -868,7 +882,7 @@ const tMain = createI18n({
     errParseFailed: 'ניתוח הקובץ נכשל',
     errImageNoText: 'קבצים מצורפים מסוג תמונה אינם מכילים טקסט; התמונה נשלחת יחד עם הודעת המשתמש',
     errNotImage: 'סוג תמונה שאינו נתמך',
-    errGskNotLoggedIn: 'לא מחובר ל-Hermes: לחץ על "התחבר ל-Hermes" למטה, התחבר ונסה שוב',
+    errGskNotLoggedIn: 'לא מחובר ל-Genspark: לחץ על "התחבר ל-Genspark" למטה, התחבר ונסה שוב',
     errNoApiKey: 'לא הוגדר מפתח API עבור {provider}',
     errNoModel: 'לא הוגדר שם מודל',
     errImgAbsPath: 'נתיב התמונה חייב להיות מוחלט.',
@@ -912,7 +926,7 @@ const tMain = createI18n({
     errImageNoText: 'छवि अनुलग्नक में टेक्स्ट नहीं होता; छवि उपयोगकर्ता संदेश के साथ भेजी जाती है',
     errNotImage: 'समर्थित छवि प्रकार नहीं है',
     errGskNotLoggedIn:
-      'Hermes में साइन इन नहीं है: नीचे “Hermes में साइन इन करें” पर क्लिक करें, साइन इन करें और फिर से कोशिश करें',
+      'Genspark में साइन इन नहीं है: नीचे “Genspark में साइन इन करें” पर क्लिक करें, साइन इन करें और फिर से कोशिश करें',
     errNoApiKey: '{provider} के लिए कोई API कुंजी कॉन्फ़िगर नहीं है',
     errNoModel: 'कोई मॉडल नाम कॉन्फ़िगर नहीं है',
     errImgAbsPath: 'छवि पथ निरपेक्ष होना चाहिए।',
@@ -958,7 +972,7 @@ const tMain = createI18n({
     errParseFailed: '檔案解析失敗',
     errImageNoText: '圖片附件不提供文字,已作為影像隨使用者訊息傳送,直接看圖即可',
     errNotImage: '不是支援的圖片類型',
-    errGskNotLoggedIn: '未登入 Hermes:請點擊下方「登入 Hermes」完成登入後重試',
+    errGskNotLoggedIn: '未登入 Genspark:請點擊下方「登入 Genspark」完成登入後重試',
     errNoApiKey: '未設定 {provider} 的 API Key',
     errNoModel: '未設定模型名稱',
     errImgAbsPath: '圖片路徑必須是絕對路徑。',
@@ -1058,13 +1072,11 @@ function dialogParent(event: IpcMainInvokeEvent): BrowserWindow | undefined {
 }
 
 async function openFileDialog(event: IpcMainInvokeEvent, options: OpenDialogOptions) {
-  const parent = dialogParent(event)
-  return parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options)
+  return showOpenDialogWithMemory(dialog, dialogParent(event), options)
 }
 
 async function saveFileDialog(event: IpcMainInvokeEvent, options: SaveDialogOptions) {
-  const parent = dialogParent(event)
-  return parent ? dialog.showSaveDialog(parent, options) : dialog.showSaveDialog(options)
+  return showSaveDialogWithMemory(dialog, dialogParent(event), options)
 }
 
 /** register a tab's webContents/client pair and wire up cleanup on teardown */
@@ -1634,6 +1646,15 @@ export function registerSheetsIpc(): void {
     return false
   })
 
+  /**
+   * Is a shell-queued workbook still waiting to be opened? The shell's 'open'
+   * nudge loop gives up after 30s; on slow dev cold starts (vite compiles the
+   * renderer on demand) Univer mounts later than that and the queued path
+   * would strand the tab as a blank in-memory workbook. The renderer polls
+   * this once it is ready and triggers the open itself.
+   */
+  ipcMain.handle('sheets:has-queued-workbook', () => hasQueuedWorkbook())
+
   ipcMain.handle(IPC_CHANNELS.selectWorkbook, async (event) => {
     const entry = sessionFor(event)
     let path = forcedWorkbookPath
@@ -1696,6 +1717,7 @@ export function registerSheetsIpc(): void {
           })
           .strict(),
       ),
+      cached: z.boolean().optional(),
     })
     .strict()
   ipcMain.handle(IPC_CHANNELS.recalcWorkbook, async (event, input: unknown) => {
@@ -1782,6 +1804,82 @@ export function registerSheetsIpc(): void {
       throw new Error(tm('errImgBadType'))
     }
     return localImageResultSchema.parse({ mediaType, base64: bytes.toString('base64') })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.captureScreenSources, async (event) => {
+    sessionFor(event)
+    // macOS gates desktopCapturer behind the Screen Recording permission and
+    // returns black frames instead of failing; surface a real denied state.
+    if (process.platform === 'darwin') {
+      const status = systemPreferences.getMediaAccessStatus('screen')
+      if (status !== 'granted' && status !== 'not-determined') {
+        return screenSourcesResultSchema.parse({ status: 'denied', sources: [] })
+      }
+    }
+    const sources = await desktopCapturer.getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: { width: 320, height: 200 },
+      fetchWindowIcons: false,
+    })
+    if (
+      process.platform === 'darwin' &&
+      systemPreferences.getMediaAccessStatus('screen') !== 'granted'
+    ) {
+      return screenSourcesResultSchema.parse({ status: 'denied', sources: [] })
+    }
+    // In tab mode the sheets renderer is a WebContentsView, so fromWebContents
+    // on the sender is null; the shell window is the one to exclude.
+    const selfWindow = sheetsShellWindow ?? BrowserWindow.fromWebContents(event.sender)
+    const selfId = selfWindow?.getMediaSourceId()
+    return screenSourcesResultSchema.parse({
+      status: 'ok',
+      sources: sources
+        .filter((source) => source.id !== selfId)
+        .map((source) => ({
+          id: source.id,
+          name: source.name,
+          kind: source.id.startsWith('screen') ? 'screen' : 'window',
+          thumbnail: source.thumbnail.isEmpty() ? '' : source.thumbnail.toDataURL(),
+        })),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.captureScreenSource, async (event, input: unknown) => {
+    sessionFor(event)
+    const request = screenCaptureRequestSchema.parse(input)
+    // desktopCapturer only ever returns thumbnails, so a full-res capture is
+    // a re-listing with the thumbnail sized to the largest physical display.
+    const displays = screen.getAllDisplays()
+    const captureSize = {
+      width: Math.min(
+        4096,
+        Math.max(1920, ...displays.map((d) => Math.ceil(d.size.width * d.scaleFactor))),
+      ),
+      height: Math.min(
+        4096,
+        Math.max(1080, ...displays.map((d) => Math.ceil(d.size.height * d.scaleFactor))),
+      ),
+    }
+    const sources = await desktopCapturer.getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: captureSize,
+      fetchWindowIcons: false,
+    })
+    const source = sources.find((candidate) => candidate.id === request.id)
+    if (!source || source.thumbnail.isEmpty()) return null
+    let image = source.thumbnail
+    let png = image.toPNG()
+    if (png.length > 20 * 1024 * 1024) {
+      image = image.resize({ width: Math.round(image.getSize().width / 2) })
+      png = image.toPNG()
+    }
+    const { width, height } = image.getSize()
+    return screenCaptureResultSchema.parse({
+      mediaType: 'image/png',
+      base64: png.toString('base64'),
+      width,
+      height,
+    })
   })
 
   ipcMain.handle(IPC_CHANNELS.readPivotDefinition, async (event, input: unknown) => {
@@ -2011,7 +2109,7 @@ export function registerSheetsAiIpc(): void {
     sessionFor(event)
     const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(SETTINGS_PATH(), {})
     const settings = resolveAiSettings(stored, defaultAiSettings())
-    // AI features all go through Hermes (gsk login); legacy settings that chose
+    // AI features all go through Genspark (gsk login); legacy settings that chose
     // another provider are reset
     settings.provider = 'hermes'
     return settings
@@ -2030,7 +2128,7 @@ export function registerSheetsAiIpc(): void {
   )
 
   ipcMain.handle(IPC_CHANNELS.aiGatewayLogin, () => {
-    gskLogin()
+    ensureGenofficeLogin((url) => void shell.openExternal(url))
   })
 
   ipcMain.handle(IPC_CHANNELS.aiSetSettings, (event, input: unknown) => {
@@ -2069,7 +2167,7 @@ export function registerSheetsAiIpc(): void {
     const maxTokens = request.maxTokens ?? 8192
     const provider = request.settings.provider as AiProviderId
     let config = request.settings.providers[provider]
-    // Hermes's key never enters the settings file; it is read from the gsk
+    // Genspark's key never enters the settings file; it is read from the gsk
     // login state per request
     if (provider === 'genspark' && config && !config.apiKey) {
       config = { ...config, apiKey: gskApiKey() }
@@ -2091,27 +2189,36 @@ export function registerSheetsAiIpc(): void {
     }
     const controller = new AbortController()
     entry.aiStreams.set(requestId, controller)
+    // wire-activity keepalive: lets the renderer's silence watchdog tell a slow turn from a dead one
+    let lastPing = 0
+    const ping = () => {
+      const now = Date.now()
+      if (now - lastPing < 5_000) return
+      lastPing = now
+      send({ requestId, type: 'ping' })
+    }
     try {
-      await streamForProvider(
-        provider,
-        config,
-        system,
-        messages,
-        tools,
-        maxTokens,
-        {
-          signal: controller.signal,
-          onDelta: (text) => send({ requestId, type: 'delta', text }),
-          onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
-        },
-        request.sessionId,
-      )
+      await streamForProvider(provider, config, system, messages, tools, maxTokens, {
+        signal: controller.signal,
+        onDelta: (text) => send({ requestId, type: 'delta', text }),
+        onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
+        onActivity: ping,
+      })
       send({ requestId, type: 'done' })
     } catch (err) {
       if (controller.signal.aborted) {
         send({ requestId, type: 'done' })
       } else {
-        send({ requestId, type: 'error', error: err instanceof Error ? err.message : String(err) })
+        send({
+          requestId,
+          type: 'error',
+          error: err instanceof Error ? err.message : String(err),
+          ...(err instanceof AiTimeoutError
+            ? { errorCode: 'timeout' as const }
+            : err instanceof AiCreditsError
+              ? { errorCode: 'credits' as const }
+              : {}),
+        })
       }
     } finally {
       entry.aiStreams.delete(requestId)
@@ -2245,52 +2352,6 @@ export function registerProjectIpc(): void {
       return { projectId: args.projectId, chatId: args.newChatId ?? args.tempChatId }
     },
   )
-
-  ipcMain.handle(
-    'project:proposal:save',
-    (_event, args: { change: Parameters<ProjectStore['saveProposedChange']>[0] }) => {
-      return getSheetsProjectStore().saveProposedChange(args.change)
-    },
-  )
-
-  ipcMain.handle(
-    'project:proposal:updateStatus',
-    (
-      _event,
-      args: {
-        projectId: string
-        proposalId: string
-        status: Parameters<ProjectStore['updateProposedChangeStatus']>[2]
-      },
-    ) => {
-      return getSheetsProjectStore().updateProposedChangeStatus(
-        args.projectId,
-        args.proposalId,
-        args.status,
-      )
-    },
-  )
-
-  ipcMain.handle('project:proposal:list', (_event, args: { projectId: string; limit?: number }) => {
-    return getSheetsProjectStore().listProposedChanges(args.projectId, args.limit ?? 100)
-  })
-
-  ipcMain.handle(
-    'project:graph:upsertReference',
-    (
-      _event,
-      args: {
-        projectId: string
-        reference: Parameters<ProjectStore['upsertDocumentReference']>[1]
-      },
-    ) => {
-      return getSheetsProjectStore().upsertDocumentReference(args.projectId, args.reference)
-    },
-  )
-
-  ipcMain.handle('project:graph:listReferences', (_event, args: { projectId: string }) => {
-    return getSheetsProjectStore().listDocumentReferences(args.projectId)
-  })
 }
 
 /**
@@ -2652,6 +2713,7 @@ export function setSheetsCloseTabHook(fn: (() => void) | null): void {
 /// the application menu and are forwarded to the renderer.
 function installApplicationMenu(): void {
   const sendMenuAction = sendSheetsMenuAction
+  const labels = appMenuLabels(getUiLang())
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
@@ -2688,7 +2750,9 @@ function installApplicationMenu(): void {
                 accelerator: process.platform === 'darwin' ? 'CmdOrCtrl+W' : 'CmdOrCtrl+Q',
                 click: () => closeActiveTabHook?.(),
               }
-            : { role: process.platform === 'darwin' ? ('close' as const) : ('quit' as const) },
+            : process.platform === 'darwin'
+              ? { role: 'close' as const, label: tm('menuClose') }
+              : { role: 'quit' as const, label: tm('menuQuit') },
         ],
       },
       {
@@ -2707,15 +2771,15 @@ function installApplicationMenu(): void {
             click: () => sendMenuAction('redo'),
           },
           { type: 'separator' },
-          { role: 'cut' },
-          { role: 'copy' },
-          { role: 'paste' },
+          { role: 'cut', label: labels.cut },
+          { role: 'copy', label: labels.copy },
+          { role: 'paste', label: labels.paste },
           { type: 'separator' },
-          { role: 'selectAll' },
+          { role: 'selectAll', label: labels.selectAll },
         ],
       },
-      { role: 'viewMenu' },
-      { role: 'windowMenu' },
+      viewMenuTemplate(labels),
+      windowMenuTemplate(process.platform, labels),
     ]),
   )
 }
@@ -2741,6 +2805,9 @@ export {
  */
 async function applyMainProcessProxy(): Promise<void> {
   const setDispatcher = async (proxyUrl: string) => {
+    // spawned gsk CLI children do their own fetch and never see the
+    // dispatcher below — forward the proxy to them via env
+    setGskProxyUrl(proxyUrl)
     try {
       const { ProxyAgent, setGlobalDispatcher } = await import('undici')
       setGlobalDispatcher(new ProxyAgent(proxyUrl))
@@ -2763,7 +2830,9 @@ async function applyMainProcessProxy(): Promise<void> {
   }
   try {
     await app.whenReady()
-    const resolved = await electronSession.defaultSession.resolveProxy('https://api.anthropic.com')
+    // PAC/rule proxies answer per-host: probe the host the login flow, the
+    // Genspark LLM proxy and the gsk CLI actually target
+    const resolved = await electronSession.defaultSession.resolveProxy('https://www.genspark.ai/')
     const m = /PROXY\s+([^;]+)/i.exec(resolved || '')
     if (m?.[1]) {
       await setDispatcher(`http://${m[1].trim()}`)
@@ -2777,6 +2846,7 @@ async function applyMainProcessProxy(): Promise<void> {
 
 export function startSheetsStandalone(): void {
   installNavigationGuard(app)
+  installContextMenu(app, () => contextMenuLabels(getUiLang()))
   // HERMESOFFICE_USER_DATA: test drivers point this at a scratch dir so automated
   // instances get their own userData AND single-instance lock (the lock is scoped
   // to userData), allowing parallel instances alongside a normal dev run.

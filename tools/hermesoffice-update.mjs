@@ -170,13 +170,18 @@ function cmdPrepare() {
       timeout: 120_000,
     })
   }
-  // --tags first: the new build's version comes from `git describe` over
-  // ho-v* tags (write-build-info.mjs); without them every build describes as
-  // a bare commit SHA. The explicit `origin main` fetch afterwards guarantees
-  // FETCH_HEAD points at main (tags alone would leave it on a tag).
-  run('git', ['-C', SOURCE_DIR, 'fetch', '--quiet', '--tags', 'origin'], { timeout: 60_000 })
+  // Main first, then tags with --force. A stale local ho-v* tag (e.g. one the
+  // remote force-moved) makes a plain `git fetch --tags` fail with "would
+  // clobber existing tag" — exit 1 — which the app surfaces as a bogus
+  // "download failed, check your network". --force adopts the remote tag, the
+  // same way the Hermes Desktop updater never lets a local tag wedge an
+  // update. Reset against origin/main (not FETCH_HEAD) so the checkout always
+  // lands on main regardless of fetch order.
   run('git', ['-C', SOURCE_DIR, 'fetch', '--quiet', 'origin', 'main'], { timeout: 60_000 })
-  run('git', ['-C', SOURCE_DIR, 'reset', '--hard', 'FETCH_HEAD'], { timeout: 60_000 })
+  run('git', ['-C', SOURCE_DIR, 'fetch', '--quiet', '--tags', '--force', 'origin'], {
+    timeout: 60_000,
+  })
+  run('git', ['-C', SOURCE_DIR, 'reset', '--hard', 'origin/main'], { timeout: 60_000 })
   progress(25, 'npm ci')
   // npm's shebang is `#!/usr/bin/env node` — in a minimal PATH the resolved
   // npm is useless without its sibling node. Prepend npm's dir so both
@@ -192,7 +197,24 @@ function cmdPrepare() {
 
 function cmdBuild() {
   progress(40, 'building app (dist:mac)')
-  run('npm', ['run', 'dist:mac'], { cwd: SOURCE_DIR, timeout: 900_000 })
+  // Retry-once, modeled on the Hermes Desktop updater (update-rebuild.ts): the
+  // first rebuild can fail on a still-settling tree or a network-blocked
+  // Electron fetch that heals mid-run; a second attempt builds clean off the
+  // healed dist. Without the retry the update bails before the swap+relaunch
+  // and the user sees "download failed, check your network" for a transient
+  // build hiccup.
+  let buildError = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) progress(40, 'retrying build (attempt 2)')
+    try {
+      run('npm', ['run', 'dist:mac'], { cwd: SOURCE_DIR, timeout: 900_000 })
+      buildError = null
+      break
+    } catch (err) {
+      buildError = err
+    }
+  }
+  if (buildError) throw buildError
   progress(85, 'staging bundle')
 
   const releaseDir = join(SOURCE_DIR, 'apps', 'shell', 'release')

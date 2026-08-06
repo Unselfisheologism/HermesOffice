@@ -10,8 +10,8 @@ import { Markdown } from '@hermesoffice/ui'
 const HERMES_COMMANDS = `
 # Hermes commands
 - Skill invocation: when the user writes /<skill-name> or @<skill-name> (e.g. /board-intelligence), load that skill with skill_view (use skills_list to find it when the name is approximate) and follow its instructions for the current task. Prefer the exact match; resolve ambiguity with the closest available skill.
-- Document reports: when the user asks you to read a document (pdf/pptx/docx/xlsx) and produce a report, follow this flow: (1) read the document with genoffice_extract_text; (2) write the report as a new .docx with genoffice_docx_create; (3) open it in the app with genoffice_app_open_file so it opens in a new tab; (4) reply with the report file path in the chat.
-- Use these genoffice_* tools for file I/O even when the app-specific tools (block/page tools) are unavailable.`
+- Document reports: when the user asks you to read a document (pdf/pptx/docx/xlsx) and produce a report, follow this flow: (1) read the document with hermesoffice_extract_text; (2) write the report as a new .docx with hermesoffice_docx_create; (3) open it in the app with hermesoffice_app_open_file so it opens in a new tab; (4) reply with the report file path in the chat.
+- Use these hermesoffice_* tools for file I/O even when the app-specific tools (block/page tools) are unavailable.`
 import sendEnterOn from '../assets/send-enter-on.png'
 import sendEnterOff from '../assets/send-enter-off.png'
 import sendStop from '../assets/send-stop.png'
@@ -234,18 +234,28 @@ export function AiPanel({
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => resizeCleanupRef.current?.(), [])
+
   /** Drag the right edge to resize: the panel is flush with the window's left edge, so width = clientX */
   const startResize = (e: ReactPointerEvent<HTMLDivElement>): void => {
     e.preventDefault()
+    const resizer = e.currentTarget
     setResizing(true)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     const onMove = (ev: PointerEvent): void => {
       setPanelWidth(clampPanelWidth(ev.clientX))
     }
-    const onUp = (): void => {
+    let done = false
+    const cleanup = (): void => {
+      if (done) return
+      done = true
+      resizeCleanupRef.current = null
       window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointerup', cleanup)
+      window.removeEventListener('pointercancel', cleanup)
+      resizer.removeEventListener('lostpointercapture', cleanup)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       setResizing(false)
@@ -254,8 +264,13 @@ export function AiPanel({
         return w
       })
     }
+    resizeCleanupRef.current = cleanup
     window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointerup', cleanup)
+    window.addEventListener('pointercancel', cleanup)
+    // lostpointercapture also fires if the resizer is unmounted mid-drag (panel collapse)
+    resizer.addEventListener('lostpointercapture', cleanup)
+    resizer.setPointerCapture(e.pointerId)
   }
 
   const typingLabel =
@@ -556,24 +571,23 @@ function IconNewChat(): ReactElement {
   )
 }
 
-/* Same glyph as the slides IconSidebarCollapse (24×24 viewBox, 1.5 stroke), rendered at 15px */
+/* Same glyph as the sheets IconCollapse (16×16 viewBox, 1.2/1.3 stroke), rendered at 15px */
 function IconCollapse(): ReactElement {
   return (
     <svg
       width={15}
       height={15}
-      viewBox="0 0 24 24"
+      viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.5"
+      strokeWidth="1.2"
       strokeLinecap="round"
-      strokeLinejoin="round"
       aria-hidden
     >
       {/* Mirrored: the AI panel docks on the LEFT, so the divider and arrow point left */}
-      <rect x="2.25" y="3.75" width="19.5" height="16.5" rx="1.5" />
-      <path d="M8.25 3.75 v16.5" />
-      <path d="M18.75 12 h-6.6 M14.7 8.85 11.55 12 l3.15 3.15" />
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1" />
+      <path d="M5.5 2.5v11" />
+      <path d="M12.5 8H8.1M9.8 5.9 7.7 8l2.1 2.1" strokeWidth="1.3" strokeLinejoin="round" />
     </svg>
   )
 }

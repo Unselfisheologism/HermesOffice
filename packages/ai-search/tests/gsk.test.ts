@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import {
+  gskChildEnv,
+  setGskProxyUrl,
   parseGskOutput,
   parseGskWebSearch,
   parseGskImageSearch,
   parseGskGeneratedImage,
+  parseGskConvertResult,
+  parseGskPastProjects,
   extractGskText,
   parseToolCliNdjson,
 } from '../src/gsk'
@@ -25,6 +29,57 @@ describe('parseGskOutput', () => {
 
   it('throws when no JSON present', () => {
     expect(() => parseGskOutput('[INFO] nothing here')).toThrow()
+  })
+})
+
+describe('gskChildEnv', () => {
+  afterEach(() => setGskProxyUrl(''))
+
+  it('sets ELECTRON_RUN_AS_NODE and no proxy vars when no proxy is known', () => {
+    const env = gskChildEnv({ PATH: '/bin' })
+    expect(env.ELECTRON_RUN_AS_NODE).toBe('1')
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined()
+    expect(env.HTTPS_PROXY).toBeUndefined()
+  })
+
+  it('forwards the proxy registered by the main-process bootstrap', () => {
+    setGskProxyUrl('http://127.0.0.1:7890')
+    const env = gskChildEnv({ PATH: '/bin' })
+    expect(env.NODE_USE_ENV_PROXY).toBe('1')
+    expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
+    expect(env.HTTP_PROXY).toBe('http://127.0.0.1:7890')
+  })
+
+  it('falls back to inherited proxy env vars (terminal launch)', () => {
+    const env = gskChildEnv({ https_proxy: 'http://10.0.0.1:8080' })
+    expect(env.NODE_USE_ENV_PROXY).toBe('1')
+    expect(env.HTTPS_PROXY).toBe('http://10.0.0.1:8080')
+  })
+
+  it('prefers the registered proxy over env vars', () => {
+    setGskProxyUrl('http://127.0.0.1:7890')
+    const env = gskChildEnv({ HTTPS_PROXY: 'http://10.0.0.1:8080' })
+    expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
+  })
+
+  it('scrubs lowercase/ALL_PROXY variants so they cannot override the selection', () => {
+    setGskProxyUrl('http://127.0.0.1:7890')
+    const env = gskChildEnv({
+      https_proxy: 'socks5://127.0.0.1:1080',
+      http_proxy: 'http://10.0.0.1:8080',
+      all_proxy: 'socks5://127.0.0.1:1080',
+    })
+    expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
+    expect(env.https_proxy).toBeUndefined()
+    expect(env.http_proxy).toBeUndefined()
+    expect(env.all_proxy).toBeUndefined()
+  })
+
+  it('ignores SOCKS proxies (undici env proxy is http(s)-only)', () => {
+    setGskProxyUrl('socks5://127.0.0.1:1080')
+    const env = gskChildEnv({ ALL_PROXY: 'socks5://127.0.0.1:1080' })
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined()
+    expect(env.HTTPS_PROXY).toBeUndefined()
   })
 })
 
@@ -94,6 +149,109 @@ describe('parseGskImageSearch', () => {
   })
 })
 
+describe('parseGskPastProjects', () => {
+  // real `gsk projects --artifact_types slides` shape (trimmed)
+  const raw = {
+    version: 1,
+    status: 'ok',
+    message: 'success',
+    data: {
+      projects: [
+        {
+          project_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+          type: 'slides_agent_git',
+          title: 'Product launch trailer presentation',
+          ctime: '2026-07-29T07:09:43.706212',
+        },
+        {
+          project_id: '12345678-90ab-4cde-8f01-234567890abc',
+          type: 'slides_agent_git',
+          title: 'Team collaboration deck request',
+          ctime: '2026-07-23T08:39:04.464484',
+        },
+      ],
+      total: 222,
+      offset: 0,
+      has_more: true,
+      returned: 2,
+    },
+    session_state: {
+      past_projects: {
+        projects: [
+          {
+            project_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+            project_url: '/agents?id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+            artifacts: [],
+          },
+        ],
+      },
+    },
+  }
+
+  it('maps projects, preferring session_state project_url and deriving the rest', () => {
+    const page = parseGskPastProjects(raw)
+    expect(page.total).toBe(222)
+    expect(page.hasMore).toBe(true)
+    expect(page.projects).toEqual([
+      {
+        projectId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        type: 'slides_agent_git',
+        title: 'Product launch trailer presentation',
+        ctime: '2026-07-29T07:09:43.706212',
+        projectUrl: '/agents?id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      },
+      {
+        projectId: '12345678-90ab-4cde-8f01-234567890abc',
+        type: 'slides_agent_git',
+        title: 'Team collaboration deck request',
+        ctime: '2026-07-23T08:39:04.464484',
+        projectUrl: '/agents?id=12345678-90ab-4cde-8f01-234567890abc',
+      },
+    ])
+  })
+
+  it('skips entries without project_id and tolerates missing data', () => {
+    const page = parseGskPastProjects({
+      status: 'ok',
+      data: { projects: [{ title: 'no id' }], has_more: false },
+    })
+    expect(page.projects).toEqual([])
+    expect(page.total).toBe(0)
+    expect(page.hasMore).toBe(false)
+  })
+
+  it('tolerates a completely empty response', () => {
+    expect(parseGskPastProjects({ status: 'ok' })).toEqual({
+      projects: [],
+      total: 0,
+      hasMore: false,
+    })
+  })
+})
+
+describe('parseGskConvertResult', () => {
+  it('extracts the markdown link from the result text', () => {
+    const raw = {
+      status: 'ok',
+      data: {
+        result:
+          'Conversion complete. Download links:\n[report.docx](https://www.genspark.ai/api/files/s/JmS2WJHv)\n',
+      },
+    }
+    expect(parseGskConvertResult(raw)).toBe('https://www.genspark.ai/api/files/s/JmS2WJHv')
+  })
+
+  it('falls back to a bare URL without markdown', () => {
+    const raw = { status: 'ok', data: { result: 'Done: https://example.com/f.docx' } }
+    expect(parseGskConvertResult(raw)).toBe('https://example.com/f.docx')
+  })
+
+  it('throws when the result has no link', () => {
+    expect(() => parseGskConvertResult({ status: 'ok', data: { result: 'no link' } })).toThrow()
+    expect(() => parseGskConvertResult({ status: 'ok' })).toThrow()
+  })
+})
+
 describe('parseGskGeneratedImage', () => {
   it('prefers no-watermark url', () => {
     const raw = {
@@ -111,9 +269,11 @@ describe('parseGskGeneratedImage', () => {
   })
 
   it('falls back to image_urls, throws on empty', () => {
-    expect(parseGskGeneratedImage({ data: { generated_images: [{ image_urls: ['https://cdn/a.png'] }] } }).url).toBe(
-      'https://cdn/a.png',
-    )
+    expect(
+      parseGskGeneratedImage({
+        data: { generated_images: [{ image_urls: ['https://cdn/a.png'] }] },
+      }).url,
+    ).toBe('https://cdn/a.png')
     expect(() => parseGskGeneratedImage({ data: { generated_images: [] } })).toThrow()
   })
 })
@@ -145,7 +305,9 @@ describe('parseToolCliNdjson', () => {
   })
 
   it('returns error result lines as-is', () => {
-    const r = parseToolCliNdjson('{"version":1,"status":"error","message":"deck_context must be an object","data":null}')
+    const r = parseToolCliNdjson(
+      '{"version":1,"status":"error","message":"deck_context must be an object","data":null}',
+    )
     expect(r.status).toBe('error')
     expect(r.message).toMatch(/deck_context/)
   })

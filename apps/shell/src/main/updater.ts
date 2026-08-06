@@ -2,8 +2,8 @@ import { app } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { UpdateInfo } from 'electron-updater'
-import { createI18n, getUiLang } from '@hermesoffice/i18n'
-import type { UpdateUiState, UpdateUiStrings } from '../shared/update-api'
+import { createI18n, getUiLang, htmlLang } from '@hermesoffice/i18n'
+import type { UpdateChannel, UpdateUiState, UpdateUiStrings } from '../shared/update-api'
 import { closeUpdateWindow, pushUpdateState, showUpdateWindow } from './update-window'
 
 /**
@@ -259,11 +259,18 @@ let started = false
 // version the user declined this session — don't nag again until next launch
 let dismissedVersion: string | null = null
 
+// electron-updater feed name per user-facing channel (latest.yml / beta.yml)
+const CHANNEL_FEED: Record<UpdateChannel, string> = { stable: 'latest', beta: 'beta' }
+
+// true once the packaged-run updater is configured; channel switches before
+// that (or in dev runs) must not touch electron-updater
+let updaterActive = false
+
 function log(...args: unknown[]): void {
   console.log('[updater]', ...args)
 }
 
-export function uiStrings(): UpdateUiStrings {
+function uiStrings(): UpdateUiStrings {
   const lang = getUiLang()
   return {
     title: tUpd(lang, 'updTitle'),
@@ -278,17 +285,35 @@ export function uiStrings(): UpdateUiStrings {
   }
 }
 
-export function initialState(version: string): UpdateUiState {
+function initialState(version: string): UpdateUiState {
   return {
     phase: 'available',
     version,
     currentVersion: app.getVersion(),
     percent: 0,
+    lang: htmlLang(getUiLang()),
     strings: uiStrings(),
   }
 }
 
-export function initAutoUpdater(getWindow: () => BrowserWindow | null): void {
+// fork: the GitHub-main updater (main-updater.ts) reuses this modal's state
+// shape and UI strings — keep them public
+export { initialState, uiStrings }
+
+export function applyUpdateChannel(channel: UpdateChannel): void {
+  if (!updaterActive) return
+  autoUpdater.channel = CHANNEL_FEED[channel]
+  // the channel setter unconditionally flips allowDowngrade to true; force it
+  // back off since a beta user switching to stable must not downgrade
+  autoUpdater.allowDowngrade = false
+  log('channel switched:', channel)
+  autoUpdater.checkForUpdates().catch((err) => log('check failed:', err?.message ?? err))
+}
+
+export function initAutoUpdater(
+  getWindow: () => BrowserWindow | null,
+  initialChannel: UpdateChannel = 'stable',
+): void {
   if (started) return
   started = true
 
@@ -304,6 +329,11 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null): void {
   if (!app.isPackaged) return
   if (process.platform !== 'win32' && process.platform !== 'darwin') return
 
+  updaterActive = true
+  autoUpdater.channel = CHANNEL_FEED[initialChannel]
+  // the channel setter unconditionally flips allowDowngrade to true; force it
+  // back off since a beta user switching to stable must not downgrade
+  autoUpdater.allowDowngrade = false
   autoUpdater.autoDownload = false
   // if the user picked "later" after download, install on normal quit
   autoUpdater.autoInstallOnAppQuit = true

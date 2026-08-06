@@ -1,27 +1,26 @@
-/**
- * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
- * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
- * atribuição original preservada em NOTICE.
- */
 import { createHash } from 'node:crypto'
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   statSync,
   unlinkSync,
-  watch,
   writeFileSync,
-  type FSWatcher,
 } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { copyFile, mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { BrowserWindow, Menu, WebContentsView, app, dialog, ipcMain, shell } from 'electron'
 import {
-  fetchWithSsrfGuard,
+  appMenuLabels,
+  contextMenuLabels,
+  fetchRemoteImage,
+  installContextMenu,
   installNavigationGuard,
   safeExternalUrl,
+  showOpenDialogWithMemory,
+  showSaveDialogWithMemory,
+  windowMenuTemplate,
 } from '@hermesoffice/electron-utils'
 import { createI18n, getUiLang, normalizeLang, setUiLang } from '@hermesoffice/i18n'
 import { ProjectStore } from '@hermesoffice/project-store'
@@ -34,6 +33,8 @@ import type {
 } from 'electron'
 import { parseFileToText } from '@hermesoffice/file-parse'
 import {
+  AiCreditsError,
+  AiTimeoutError,
   chatForProvider,
   defaultAiSettings,
   resolveAiSettings,
@@ -42,12 +43,12 @@ import {
   type AiSettings,
   type AiStreamChunk,
   type AiStreamRequest,
-  type GatewayAccountStatus,
+  type GenSparkAccountStatus,
   type LegacyAiSettings,
 } from '@hermesoffice/ai-provider'
 import {
+  ensureGenofficeLogin,
   gskApiKey,
-  gskLogin,
   gskLoginInfo,
   hasGskAuth,
   webSearch,
@@ -64,6 +65,8 @@ import type {
 } from '../shared/ipc'
 import { ATTACHMENT_IMAGE_EXTS } from '../shared/ipc'
 import { findDocxPath } from '../shared/open-file'
+import { atomicWriteFile, looksLikeZip } from './atomic-write'
+import { isExternallyModified, type DiskFileState } from './external-change'
 import { initDocsAutoUpdater } from './updater'
 
 /**
@@ -91,6 +94,9 @@ const tMain = createI18n({
     autosaveDiscard: '放弃',
     btnDontSave: '不保存',
     btnCancel: '取消',
+    extModifiedMsg: '文件已被其他程序修改。',
+    extModifiedDetail: '仍要保存并覆盖磁盘上的更改吗?',
+    btnOverwrite: '覆盖',
     dlgInsertImage: '插入图片',
     filterImages: '图片',
     dlgAddAttachment: '添加附件',
@@ -106,7 +112,7 @@ const tMain = createI18n({
     errParseFailed: '文件解析失败',
     errImageNoText: '图片附件不提供文本,已作为图像随用户消息发送,直接看图即可',
     errNotImage: '不是支持的图片类型',
-    errGskNotLoggedIn: '未登录 Hermes:请点击下方「登录 Hermes」完成登录后重试',
+    errGskNotLoggedIn: '未登录 Genspark:请点击下方「登录 Genspark」完成登录后重试',
     errNoApiKey: '未配置 {provider} 的 API Key',
     errNoModel: '未配置模型名称',
     menuFile: '文件',
@@ -181,6 +187,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Discard',
     btnDontSave: "Don't Save",
     btnCancel: 'Cancel',
+    extModifiedMsg: 'The file has been modified by another program.',
+    extModifiedDetail: 'Save anyway and overwrite the changes on disk?',
+    btnOverwrite: 'Overwrite',
     dlgInsertImage: 'Insert Image',
     filterImages: 'Images',
     dlgAddAttachment: 'Add Attachments',
@@ -197,7 +206,7 @@ const tMain = createI18n({
     errImageNoText: 'Image attachments have no text; the image is sent along with the user message',
     errNotImage: 'not a supported image type',
     errGskNotLoggedIn:
-      'Not signed in to Hermes: click “Sign in to Hermes” below, sign in, then retry',
+      'Not signed in to Genspark: click “Sign in to Genspark” below, sign in, then retry',
     errNoApiKey: 'No API key configured for {provider}',
     errNoModel: 'No model name configured',
     menuFile: 'File',
@@ -271,6 +280,9 @@ const tMain = createI18n({
     autosaveDiscard: '破棄',
     btnDontSave: '保存しない',
     btnCancel: 'キャンセル',
+    extModifiedMsg: 'このファイルは別のプログラムによって変更されています。',
+    extModifiedDetail: 'このまま保存してディスク上の変更を上書きしますか?',
+    btnOverwrite: '上書き',
     dlgInsertImage: '画像の挿入',
     filterImages: '画像',
     dlgAddAttachment: '添付ファイルの追加',
@@ -288,7 +300,7 @@ const tMain = createI18n({
       '画像の添付ファイルはテキストを提供しません。画像としてユーザーメッセージと一緒に送信されるため、そのまま画像をご確認ください',
     errNotImage: 'サポートされていない画像形式です',
     errGskNotLoggedIn:
-      'Hermes にサインインしていません。下の「Hermes にサインイン」からサインインして再試行してください',
+      'Genspark にサインインしていません。下の「Genspark にサインイン」からサインインして再試行してください',
     errNoApiKey: '{provider} の API キーが設定されていません',
     errNoModel: 'モデル名が設定されていません',
     menuFile: 'ファイル',
@@ -363,6 +375,9 @@ const tMain = createI18n({
     autosaveDiscard: '취소',
     btnDontSave: '저장 안 함',
     btnCancel: '취소',
+    extModifiedMsg: '이 파일이 다른 프로그램에서 수정되었습니다.',
+    extModifiedDetail: '그래도 저장하여 디스크의 변경 사항을 덮어쓸까요?',
+    btnOverwrite: '덮어쓰기',
     dlgInsertImage: '그림 삽입',
     filterImages: '그림',
     dlgAddAttachment: '첨부 파일 추가',
@@ -380,7 +395,7 @@ const tMain = createI18n({
       '이미지 첨부 파일은 텍스트를 제공하지 않으며, 이미지 형태로 사용자 메시지와 함께 전송되므로 이미지를 직접 확인하면 됩니다',
     errNotImage: '지원되지 않는 이미지 형식입니다',
     errGskNotLoggedIn:
-      'Hermes에 로그인되어 있지 않습니다. 아래 "Hermes 로그인"을 눌러 로그인한 뒤 다시 시도하세요',
+      'Genspark에 로그인되어 있지 않습니다. 아래 "Genspark 로그인"을 눌러 로그인한 뒤 다시 시도하세요',
     errNoApiKey: '{provider}의 API 키가 설정되지 않았습니다',
     errNoModel: '모델 이름이 설정되지 않았습니다',
     menuFile: '파일',
@@ -456,6 +471,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Ignorer',
     btnDontSave: 'Ne pas enregistrer',
     btnCancel: 'Annuler',
+    extModifiedMsg: 'Le fichier a été modifié par un autre programme.',
+    extModifiedDetail: 'Enregistrer quand même et écraser les modifications sur le disque ?',
+    btnOverwrite: 'Écraser',
     dlgInsertImage: 'Insérer une image',
     filterImages: 'Images',
     dlgAddAttachment: 'Ajouter des pièces jointes',
@@ -473,7 +491,7 @@ const tMain = createI18n({
       "Les pièces jointes image ne fournissent pas de texte ; l'image est envoyée avec le message de l'utilisateur, consultez-la directement",
     errNotImage: "type d'image non pris en charge",
     errGskNotLoggedIn:
-      'Non connecté à Hermes : cliquez sur « Se connecter à Hermes » ci-dessous, connectez-vous puis réessayez',
+      'Non connecté à Genspark : cliquez sur « Se connecter à Genspark » ci-dessous, connectez-vous puis réessayez',
     errNoApiKey: 'Aucune clé API configurée pour {provider}',
     errNoModel: 'Aucun nom de modèle configuré',
     menuFile: 'Fichier',
@@ -549,6 +567,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Verwerfen',
     btnDontSave: 'Nicht speichern',
     btnCancel: 'Abbrechen',
+    extModifiedMsg: 'Die Datei wurde von einem anderen Programm geändert.',
+    extModifiedDetail: 'Trotzdem speichern und die Änderungen auf dem Datenträger überschreiben?',
+    btnOverwrite: 'Überschreiben',
     dlgInsertImage: 'Bild einfügen',
     filterImages: 'Bilder',
     dlgAddAttachment: 'Anlagen hinzufügen',
@@ -566,7 +587,7 @@ const tMain = createI18n({
       'Bildanlagen liefern keinen Text; das Bild wird mit der Benutzernachricht gesendet und kann direkt betrachtet werden',
     errNotImage: 'kein unterstütztes Bildformat',
     errGskNotLoggedIn:
-      'Nicht bei Hermes angemeldet: Klicken Sie unten auf „Bei Hermes anmelden“, melden Sie sich an und versuchen Sie es erneut',
+      'Nicht bei Genspark angemeldet: Klicken Sie unten auf „Bei Genspark anmelden“, melden Sie sich an und versuchen Sie es erneut',
     errNoApiKey: 'Kein API-Schlüssel für {provider} konfiguriert',
     errNoModel: 'Kein Modellname konfiguriert',
     menuFile: 'Datei',
@@ -641,6 +662,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Descartar',
     btnDontSave: 'No guardar',
     btnCancel: 'Cancelar',
+    extModifiedMsg: 'El archivo ha sido modificado por otro programa.',
+    extModifiedDetail: '¿Guardar de todos modos y sobrescribir los cambios en el disco?',
+    btnOverwrite: 'Sobrescribir',
     dlgInsertImage: 'Insertar imagen',
     filterImages: 'Imágenes',
     dlgAddAttachment: 'Agregar datos adjuntos',
@@ -658,7 +682,7 @@ const tMain = createI18n({
       'Las imágenes adjuntas no proporcionan texto; la imagen se envía junto con el mensaje del usuario, puedes verla directamente',
     errNotImage: 'no es un tipo de imagen compatible',
     errGskNotLoggedIn:
-      'No has iniciado sesión en Hermes: pulsa «Iniciar sesión en Hermes» abajo, inicia sesión y vuelve a intentarlo',
+      'No has iniciado sesión en Genspark: pulsa «Iniciar sesión en Genspark» abajo, inicia sesión y vuelve a intentarlo',
     errNoApiKey: 'No hay clave de API configurada para {provider}',
     errNoModel: 'No se ha configurado el nombre del modelo',
     menuFile: 'Archivo',
@@ -732,6 +756,9 @@ const tMain = createI18n({
     autosaveDiscard: 'ละทิ้ง',
     btnDontSave: 'ไม่บันทึก',
     btnCancel: 'ยกเลิก',
+    extModifiedMsg: 'ไฟล์ถูกแก้ไขโดยโปรแกรมอื่น',
+    extModifiedDetail: 'บันทึกต่อไปและเขียนทับการเปลี่ยนแปลงบนดิสก์หรือไม่?',
+    btnOverwrite: 'เขียนทับ',
     dlgInsertImage: 'แทรกรูปภาพ',
     filterImages: 'รูปภาพ',
     dlgAddAttachment: 'เพิ่มสิ่งที่แนบ',
@@ -749,7 +776,7 @@ const tMain = createI18n({
       'สิ่งที่แนบเป็นรูปภาพไม่มีข้อความ รูปจะถูกส่งไปพร้อมข้อความของผู้ใช้ ดูรูปได้โดยตรง',
     errNotImage: 'ไม่ใช่ชนิดรูปภาพที่รองรับ',
     errGskNotLoggedIn:
-      'ยังไม่ได้ลงชื่อเข้าใช้ Hermes: แตะ “ลงชื่อเข้าใช้ Hermes” ด้านล่าง แล้วลองอีกครั้ง',
+      'ยังไม่ได้ลงชื่อเข้าใช้ Genspark: แตะ “ลงชื่อเข้าใช้ Genspark” ด้านล่าง แล้วลองอีกครั้ง',
     errNoApiKey: 'ยังไม่ได้ตั้งค่า API Key ของ {provider}',
     errNoModel: 'ยังไม่ได้ตั้งค่าชื่อโมเดล',
     menuFile: 'ไฟล์',
@@ -824,6 +851,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Buang',
     btnDontSave: 'Jangan Simpan',
     btnCancel: 'Batal',
+    extModifiedMsg: 'File telah diubah oleh program lain.',
+    extModifiedDetail: 'Tetap simpan dan timpa perubahan di disk?',
+    btnOverwrite: 'Timpa',
     dlgInsertImage: 'Sisipkan Gambar',
     filterImages: 'Gambar',
     dlgAddAttachment: 'Tambahkan Lampiran',
@@ -840,7 +870,7 @@ const tMain = createI18n({
     errImageNoText:
       'Lampiran gambar tidak menyediakan teks; gambar dikirim bersama pesan pengguna dan dapat dilihat langsung',
     errNotImage: 'bukan jenis gambar yang didukung',
-    errGskNotLoggedIn: 'Belum masuk ke Hermes: klik “Masuk ke Hermes” di bawah, lalu coba lagi',
+    errGskNotLoggedIn: 'Belum masuk ke Genspark: klik “Masuk ke Genspark” di bawah, lalu coba lagi',
     errNoApiKey: 'API Key untuk {provider} belum dikonfigurasi',
     errNoModel: 'Nama model belum dikonfigurasi',
     menuFile: 'File',
@@ -915,6 +945,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Отклонить',
     btnDontSave: 'Не сохранять',
     btnCancel: 'Отмена',
+    extModifiedMsg: 'Файл был изменён другой программой.',
+    extModifiedDetail: 'Всё равно сохранить и перезаписать изменения на диске?',
+    btnOverwrite: 'Перезаписать',
     dlgInsertImage: 'Вставить рисунок',
     filterImages: 'Изображения',
     dlgAddAttachment: 'Добавить вложения',
@@ -932,7 +965,7 @@ const tMain = createI18n({
       'Вложенные изображения не содержат текста; изображение отправляется вместе с сообщением пользователя, смотрите его напрямую',
     errNotImage: 'неподдерживаемый тип изображения',
     errGskNotLoggedIn:
-      'Вы не вошли в Hermes: нажмите «Войти в Hermes» ниже, войдите и повторите попытку',
+      'Вы не вошли в Genspark: нажмите «Войти в Genspark» ниже, войдите и повторите попытку',
     errNoApiKey: 'API-ключ для {provider} не настроен',
     errNoModel: 'Не указано имя модели',
     menuFile: 'Файл',
@@ -1007,6 +1040,9 @@ const tMain = createI18n({
     autosaveDiscard: 'تجاهل',
     btnDontSave: 'عدم الحفظ',
     btnCancel: 'إلغاء',
+    extModifiedMsg: 'تم تعديل الملف بواسطة برنامج آخر.',
+    extModifiedDetail: 'هل تريد الحفظ على أي حال والكتابة فوق التغييرات على القرص؟',
+    btnOverwrite: 'استبدال',
     dlgInsertImage: 'إدراج صورة',
     filterImages: 'الصور',
     dlgAddAttachment: 'إضافة مرفقات',
@@ -1024,7 +1060,7 @@ const tMain = createI18n({
       'مرفقات الصور لا توفر نصًا؛ تُرسل الصورة مع رسالة المستخدم ويمكن الاطلاع عليها مباشرة',
     errNotImage: 'ليس نوع صورة مدعومًا',
     errGskNotLoggedIn:
-      'لم تسجّل الدخول إلى Hermes: انقر على «تسجيل الدخول إلى Hermes» أدناه ثم أعد المحاولة',
+      'لم تسجّل الدخول إلى Genspark: انقر على «تسجيل الدخول إلى Genspark» أدناه ثم أعد المحاولة',
     errNoApiKey: 'لم يتم تكوين مفتاح API لـ {provider}',
     errNoModel: 'لم يتم تكوين اسم النموذج',
     menuFile: 'ملف',
@@ -1099,6 +1135,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Descartar',
     btnDontSave: 'Não Salvar',
     btnCancel: 'Cancelar',
+    extModifiedMsg: 'O arquivo foi modificado por outro programa.',
+    extModifiedDetail: 'Salvar mesmo assim e sobrescrever as alterações no disco?',
+    btnOverwrite: 'Sobrescrever',
     dlgInsertImage: 'Inserir Imagem',
     filterImages: 'Imagens',
     dlgAddAttachment: 'Adicionar Anexos',
@@ -1116,7 +1155,7 @@ const tMain = createI18n({
       'Anexos de imagem não fornecem texto; a imagem é enviada junto com a mensagem do usuário, basta vê-la diretamente',
     errNotImage: 'não é um tipo de imagem suportado',
     errGskNotLoggedIn:
-      'Não conectado ao Hermes: clique em “Entrar no Hermes” abaixo, entre e tente novamente',
+      'Não conectado ao Genspark: clique em “Entrar no Genspark” abaixo, entre e tente novamente',
     errNoApiKey: 'Nenhuma chave de API configurada para {provider}',
     errNoModel: 'Nenhum nome de modelo configurado',
     menuFile: 'Arquivo',
@@ -1191,6 +1230,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Ignora',
     btnDontSave: 'Non salvare',
     btnCancel: 'Annulla',
+    extModifiedMsg: 'Il file è stato modificato da un altro programma.',
+    extModifiedDetail: 'Salvare comunque e sovrascrivere le modifiche sul disco?',
+    btnOverwrite: 'Sovrascrivi',
     dlgInsertImage: 'Inserisci immagine',
     filterImages: 'Immagini',
     dlgAddAttachment: 'Aggiungi allegati',
@@ -1208,7 +1250,7 @@ const tMain = createI18n({
       "Gli allegati immagine non forniscono testo; l'immagine viene inviata insieme al messaggio dell'utente, basta guardarla direttamente",
     errNotImage: 'tipo di immagine non supportato',
     errGskNotLoggedIn:
-      'Accesso a Hermes non effettuato: fai clic su “Accedi a Hermes” qui sotto, accedi e riprova',
+      'Accesso a Genspark non effettuato: fai clic su “Accedi a Genspark” qui sotto, accedi e riprova',
     errNoApiKey: 'Nessuna chiave API configurata per {provider}',
     errNoModel: 'Nessun nome di modello configurato',
     menuFile: 'File',
@@ -1283,6 +1325,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Odrzuć',
     btnDontSave: 'Nie zapisuj',
     btnCancel: 'Anuluj',
+    extModifiedMsg: 'Plik został zmodyfikowany przez inny program.',
+    extModifiedDetail: 'Zapisać mimo to i nadpisać zmiany na dysku?',
+    btnOverwrite: 'Nadpisz',
     dlgInsertImage: 'Wstaw obraz',
     filterImages: 'Obrazy',
     dlgAddAttachment: 'Dodaj załączniki',
@@ -1300,7 +1345,7 @@ const tMain = createI18n({
       'Załączniki graficzne nie zawierają tekstu; obraz jest wysyłany razem z wiadomością użytkownika, wystarczy na niego spojrzeć',
     errNotImage: 'nieobsługiwany typ obrazu',
     errGskNotLoggedIn:
-      'Nie zalogowano do Hermes: kliknij „Zaloguj się do Hermes” poniżej, zaloguj się i spróbuj ponownie',
+      'Nie zalogowano do Genspark: kliknij „Zaloguj się do Genspark” poniżej, zaloguj się i spróbuj ponownie',
     errNoApiKey: 'Nie skonfigurowano klucza API dla {provider}',
     errNoModel: 'Nie skonfigurowano nazwy modelu',
     menuFile: 'Plik',
@@ -1375,6 +1420,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Negeren',
     btnDontSave: 'Niet opslaan',
     btnCancel: 'Annuleren',
+    extModifiedMsg: 'Het bestand is door een ander programma gewijzigd.',
+    extModifiedDetail: 'Toch opslaan en de wijzigingen op schijf overschrijven?',
+    btnOverwrite: 'Overschrijven',
     dlgInsertImage: 'Afbeelding invoegen',
     filterImages: 'Afbeeldingen',
     dlgAddAttachment: 'Bijlagen toevoegen',
@@ -1392,7 +1440,7 @@ const tMain = createI18n({
       'Afbeeldingsbijlagen bevatten geen tekst; de afbeelding wordt samen met het gebruikersbericht verzonden en kan direct worden bekeken',
     errNotImage: 'geen ondersteund afbeeldingstype',
     errGskNotLoggedIn:
-      'Niet aangemeld bij Hermes: klik hieronder op “Aanmelden bij Hermes”, meld u aan en probeer het opnieuw',
+      'Niet aangemeld bij Genspark: klik hieronder op “Aanmelden bij Genspark”, meld u aan en probeer het opnieuw',
     errNoApiKey: 'Geen API-sleutel geconfigureerd voor {provider}',
     errNoModel: 'Geen modelnaam geconfigureerd',
     menuFile: 'Bestand',
@@ -1467,6 +1515,9 @@ const tMain = createI18n({
     autosaveDiscard: 'Buang',
     btnDontSave: 'Jangan Simpan',
     btnCancel: 'Batal',
+    extModifiedMsg: 'Fail telah diubah oleh program lain.',
+    extModifiedDetail: 'Simpan juga dan tulis ganti perubahan pada cakera?',
+    btnOverwrite: 'Tulis Ganti',
     dlgInsertImage: 'Sisipkan Imej',
     filterImages: 'Imej',
     dlgAddAttachment: 'Tambah Lampiran',
@@ -1484,7 +1535,7 @@ const tMain = createI18n({
       'Lampiran imej tidak menyediakan teks; imej dihantar bersama mesej pengguna dan boleh dilihat terus',
     errNotImage: 'bukan jenis imej yang disokong',
     errGskNotLoggedIn:
-      'Belum log masuk ke Hermes: klik “Log masuk ke Hermes” di bawah, kemudian cuba lagi',
+      'Belum log masuk ke Genspark: klik “Log masuk ke Genspark” di bawah, kemudian cuba lagi',
     errNoApiKey: 'Kunci API untuk {provider} belum dikonfigurasikan',
     errNoModel: 'Nama model belum dikonfigurasikan',
     menuFile: 'Fail',
@@ -1558,6 +1609,9 @@ const tMain = createI18n({
     autosaveDiscard: 'התעלם',
     btnDontSave: 'אל תשמור',
     btnCancel: 'ביטול',
+    extModifiedMsg: 'הקובץ שונה על ידי תוכנית אחרת.',
+    extModifiedDetail: 'לשמור בכל זאת ולדרוס את השינויים בדיסק?',
+    btnOverwrite: 'דרוס',
     dlgInsertImage: 'הוספת תמונה',
     filterImages: 'תמונות',
     dlgAddAttachment: 'הוספת קבצים מצורפים',
@@ -1574,7 +1628,7 @@ const tMain = createI18n({
     errImageNoText:
       'קבצים מצורפים מסוג תמונה אינם מספקים טקסט; התמונה נשלחת יחד עם הודעת המשתמש וניתן לצפות בה ישירות',
     errNotImage: 'סוג תמונה שאינו נתמך',
-    errGskNotLoggedIn: 'לא מחובר ל-Hermes: לחץ על "התחבר ל-Hermes" למטה, התחבר ונסה שוב',
+    errGskNotLoggedIn: 'לא מחובר ל-Genspark: לחץ על "התחבר ל-Genspark" למטה, התחבר ונסה שוב',
     errNoApiKey: 'לא הוגדר מפתח API עבור {provider}',
     errNoModel: 'לא הוגדר שם מודל',
     menuFile: 'קובץ',
@@ -1649,6 +1703,9 @@ const tMain = createI18n({
     autosaveDiscard: 'छोड़ें',
     btnDontSave: 'न सहेजें',
     btnCancel: 'रद्द करें',
+    extModifiedMsg: 'फ़ाइल को किसी अन्य प्रोग्राम ने बदल दिया है।',
+    extModifiedDetail: 'फिर भी सहेजें और डिस्क पर मौजूद बदलावों को अधिलेखित करें?',
+    btnOverwrite: 'अधिलेखित करें',
     dlgInsertImage: 'छवि सम्मिलित करें',
     filterImages: 'छवियाँ',
     dlgAddAttachment: 'अनुलग्नक जोड़ें',
@@ -1666,7 +1723,7 @@ const tMain = createI18n({
       'छवि अनुलग्नक टेक्स्ट प्रदान नहीं करते; छवि उपयोगकर्ता संदेश के साथ भेजी जाती है, उसे सीधे देखें',
     errNotImage: 'समर्थित छवि प्रकार नहीं है',
     errGskNotLoggedIn:
-      'Hermes में साइन इन नहीं है: नीचे “Hermes में साइन इन करें” पर क्लिक करें, साइन इन करें और फिर से कोशिश करें',
+      'Genspark में साइन इन नहीं है: नीचे “Genspark में साइन इन करें” पर क्लिक करें, साइन इन करें और फिर से कोशिश करें',
     errNoApiKey: '{provider} के लिए कोई API कुंजी कॉन्फ़िगर नहीं है',
     errNoModel: 'कोई मॉडल नाम कॉन्फ़िगर नहीं है',
     menuFile: 'फ़ाइल',
@@ -1740,6 +1797,9 @@ const tMain = createI18n({
     autosaveDiscard: '放棄',
     btnDontSave: '不儲存',
     btnCancel: '取消',
+    extModifiedMsg: '檔案已被其他程式修改。',
+    extModifiedDetail: '仍要儲存並覆寫磁碟上的變更嗎?',
+    btnOverwrite: '覆寫',
     dlgInsertImage: '插入圖片',
     filterImages: '圖片',
     dlgAddAttachment: '新增附件',
@@ -1755,7 +1815,7 @@ const tMain = createI18n({
     errParseFailed: '檔案解析失敗',
     errImageNoText: '圖片附件不提供文字,已作為影像隨使用者訊息傳送,直接看圖即可',
     errNotImage: '不是支援的圖片類型',
-    errGskNotLoggedIn: '未登入 Hermes:請點擊下方「登入 Hermes」完成登入後重試',
+    errGskNotLoggedIn: '未登入 Genspark:請點擊下方「登入 Genspark」完成登入後重試',
     errNoApiKey: '未設定 {provider} 的 API Key',
     errNoModel: '未設定模型名稱',
     menuFile: '檔案',
@@ -1837,6 +1897,10 @@ let runtime: DocsRuntimeConfig = {
 
 export function configureDocsRuntime(config: DocsRuntimeConfig): void {
   runtime = config
+  // shell mode: the shell queues argv files itself (per-tab pendingWindowOpens);
+  // the module-scope fallback would leak the double-clicked file into the next
+  // blank tab's consume-pending-open
+  pendingOpenPath = null
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -1876,13 +1940,11 @@ function dialogParent(event: IpcMainInvokeEvent): BrowserWindow | undefined {
 }
 
 async function openDialog(event: IpcMainInvokeEvent, options: OpenDialogOptions) {
-  const parent = dialogParent(event)
-  return parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options)
+  return showOpenDialogWithMemory(dialog, dialogParent(event), options)
 }
 
 async function saveDialog(event: IpcMainInvokeEvent, options: SaveDialogOptions) {
-  const parent = dialogParent(event)
-  return parent ? dialog.showSaveDialog(parent, options) : dialog.showSaveDialog(options)
+  return showSaveDialogWithMemory(dialog, dialogParent(event), options)
 }
 
 /** default folder where new files land on their first (silent) save; shared with the other editors via shell */
@@ -1909,13 +1971,15 @@ export function openExternalDocx(filePath: string | null): void {
     pendingOpenPath = filePath
     return
   }
-  void loadDocx(filePath).then((result) => {
-    if (!result || win.isDestroyed()) return
-    if (win.isMinimized()) win.restore()
-    win.show()
-    win.focus()
-    win.webContents.send('docs:opened', result)
-  })
+  void loadDocx(filePath, win.webContents.id)
+    .then((result) => {
+      if (!result || win.isDestroyed()) return
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+      win.webContents.send('docs:opened', result)
+    })
+    .catch((err) => dialog.showErrorBox(tm('dlgOpenDoc'), String(err)))
 }
 
 function userDataPath(...parts: string[]): string {
@@ -1977,8 +2041,14 @@ export function removeRecentFiles(filePaths: string[]): void {
  *  title bar (docs keeps path state on the renderer side). */
 export function docsFileRenamed(wc: WebContents, oldPath: string, newPath: string): void {
   // keep the save allowlist in sync so docs:save accepts the renamed path
-  docWritablePaths.delete(oldPath)
-  docWritablePaths.add(newPath)
+  docWritablePaths.get(wc.id)?.delete(oldPath)
+  allowDocWrite(wc.id, newPath)
+  const states = docDiskStates.get(wc.id)
+  const recorded = states?.get(oldPath)
+  if (states && recorded) {
+    states.delete(oldPath)
+    states.set(newPath, recorded)
+  }
   wc.send('docs:renamed', { oldPath, newPath })
 }
 
@@ -2017,17 +2087,137 @@ export function toggleStarredFile(filePath: string): void {
 
 // ---- original archive (pass-through base: original file archived by content hash) ----
 
-function archiveOriginal(filePath: string, bytes: Buffer): string {
-  const hash = createHash('sha256').update(bytes).digest('hex')
+async function archiveOriginal(filePath: string, bytes: Buffer): Promise<string> {
+  const hash = sha256Hex(bytes)
   const dir = userDataPath('originals')
-  mkdirSync(dir, { recursive: true })
+  await mkdir(dir, { recursive: true })
   const target = join(dir, `${hash}.docx`)
-  if (!existsSync(target)) copyFileSync(filePath, target)
+  if (!existsSync(target)) await copyFile(filePath, target)
+  void pruneOriginals(dir)
   return hash
 }
 
-/** paths the renderer may overwrite via docs:save — populated by open/save-as flows */
-const docWritablePaths = new Set<string>()
+const ORIGINALS_MAX_BYTES = 500 * 1024 * 1024
+let originalsPruneRunning = false
+
+/** cap the archive's total size; oldest by mtime go first (never blocks the open path) */
+async function pruneOriginals(dir: string): Promise<void> {
+  if (originalsPruneRunning) return
+  originalsPruneRunning = true
+  try {
+    const files: Array<{ path: string; size: number; mtimeMs: number }> = []
+    for (const name of await readdir(dir)) {
+      try {
+        const s = await stat(join(dir, name))
+        if (s.isFile()) files.push({ path: join(dir, name), size: s.size, mtimeMs: s.mtimeMs })
+      } catch {
+        /* removed concurrently */
+      }
+    }
+    let total = files.reduce((sum, f) => sum + f.size, 0)
+    files.sort((a, b) => a.mtimeMs - b.mtimeMs)
+    for (const f of files) {
+      if (total <= ORIGINALS_MAX_BYTES) break
+      try {
+        await unlink(f.path)
+        total -= f.size
+      } catch {
+        /* already gone */
+      }
+    }
+  } catch {
+    /* directory unreadable: retry on the next archive */
+  } finally {
+    originalsPruneRunning = false
+  }
+}
+
+/** per-renderer paths writable via docs:save — populated by open/save-as flows */
+const docWritablePaths = new Map<number, Set<string>>()
+/** per-renderer PDF export targets authorized via the export save dialog */
+const pdfWritablePaths = new Map<number, Set<string>>()
+const tornDownWcIds = new Set<number>()
+
+function allowDocWrite(wcId: number, filePath: string): void {
+  const set = docWritablePaths.get(wcId) ?? new Set<string>()
+  set.add(filePath)
+  docWritablePaths.set(wcId, set)
+}
+
+function canDocWrite(wcId: number, filePath: string): boolean {
+  return docWritablePaths.get(wcId)?.has(filePath) === true
+}
+
+function allowPdfWrite(wcId: number, filePath: string): void {
+  const set = pdfWritablePaths.get(wcId) ?? new Set<string>()
+  set.add(filePath)
+  pdfWritablePaths.set(wcId, set)
+}
+
+function canPdfWrite(wcId: number, filePath: string): boolean {
+  return pdfWritablePaths.get(wcId)?.has(filePath) === true
+}
+
+function dropDocWriter(wcId: number): void {
+  docWritablePaths.delete(wcId)
+  pdfWritablePaths.delete(wcId)
+  docDiskStates.delete(wcId)
+  // Destroyed renderers count as torn down too: window-close paths never run
+  // teardownDocsRenderer, but an in-flight save handler resuming after the
+  // destruction must still fail its re-check (wcIds are never reused, so the
+  // set only accumulates a few integers per session).
+  tornDownWcIds.add(wcId)
+}
+
+// ── External-modification detection: remember the disk state at every read/write
+// so docs:save can refuse to clobber edits made by Word/another window ──
+const docDiskStates = new Map<number, Map<string, DiskFileState>>()
+
+const sha256Hex = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
+
+async function rememberDiskState(wcId: number, filePath: string, bytes: Buffer): Promise<void> {
+  try {
+    const s = await stat(filePath)
+    const states = docDiskStates.get(wcId) ?? new Map<string, DiskFileState>()
+    states.set(filePath, { mtimeMs: s.mtimeMs, size: s.size, hash: sha256Hex(bytes) })
+    docDiskStates.set(wcId, states)
+  } catch {
+    /* unstatable target: skip tracking; the next save simply won't flag a conflict */
+  }
+}
+
+async function diskChangedExternally(wcId: number, filePath: string): Promise<boolean> {
+  let current: { mtimeMs: number; size: number } | null
+  try {
+    current = await stat(filePath)
+  } catch {
+    current = null
+  }
+  return isExternallyModified(docDiskStates.get(wcId)?.get(filePath), current, async () => {
+    try {
+      return sha256Hex(await readFile(filePath))
+    } catch {
+      return null
+    }
+  })
+}
+
+/** A closed docs tab detaches without destroying its webContents (shell freeze
+ * workaround), so the orphan must lose write access and stop its timers — otherwise
+ * its 30s recovery loop resurrects content the user already discarded. */
+export function teardownDocsRenderer(contents: WebContents): void {
+  tornDownWcIds.add(contents.id)
+  // Sweep recovery copies for this renderer's documents: every non-crash close
+  // either saved (docs:save already cleared it) or explicitly discarded, so a
+  // copy still on disk here is a leftover from an in-flight recovery write.
+  for (const p of docWritablePaths.get(contents.id) ?? []) clearRecoveryCopy(p)
+  // reclaim every per-wcId grant, not just doc saves — the orphaned renderer
+  // must also lose its dialog-authorized PDF targets and disk-state cache
+  docWritablePaths.delete(contents.id)
+  pdfWritablePaths.delete(contents.id)
+  docDiskStates.delete(contents.id)
+  if (!contents.isDestroyed()) contents.send('docs:teardown')
+}
 
 // ── Crash recovery: dirty renderers push a copy every 30s
 // (docs:write-recovery); a normal save cleans it up; open offers Restore/Discard ──
@@ -2035,7 +2225,12 @@ const recoveryDir = () => userDataPath('docs-autosave')
 const recoveryPathFor = (filePath: string) =>
   join(recoveryDir(), `${createHash('sha1').update(filePath).digest('hex').slice(0, 16)}.docx`)
 
+/** Bumped by every clear: an in-flight docs:write-recovery that started before
+ * the bump must not recreate the file it is about to land (stale-recovery race). */
+const recoveryClearEpochs = new Map<string, number>()
+
 function clearRecoveryCopy(filePath: string): void {
+  recoveryClearEpochs.set(filePath, (recoveryClearEpochs.get(filePath) ?? 0) + 1)
   try {
     unlinkSync(recoveryPathFor(filePath))
   } catch {
@@ -2050,8 +2245,11 @@ async function maybeRecoverDocBytes(filePath: string, original: Buffer): Promise
   try {
     if (!existsSync(asPath)) return original
     if (statSync(asPath).mtimeMs <= statSync(filePath).mtimeMs) {
-      unlinkSync(asPath)
-      return original
+      // a crashed partial write bumps mtime yet corrupts the file — keep the copy then
+      if (looksLikeZip(original)) {
+        unlinkSync(asPath)
+        return original
+      }
     }
   } catch {
     return original
@@ -2071,7 +2269,7 @@ async function maybeRecoverDocBytes(filePath: string, original: Buffer): Promise
       : await dialog.showMessageBox(options)
   if (r.response === 0) {
     try {
-      return readFileSync(asPath)
+      return await readFile(asPath)
     } catch {
       return original
     }
@@ -2080,14 +2278,16 @@ async function maybeRecoverDocBytes(filePath: string, original: Buffer): Promise
   return original
 }
 
-async function loadDocx(filePath: string): Promise<OpenFileResult | null> {
+async function loadDocx(filePath: string, wcId: number): Promise<OpenFileResult | null> {
   if (typeof filePath !== 'string' || !/\.docx$/i.test(filePath)) return null
   if (!existsSync(filePath)) return null
-  const original = readFileSync(filePath)
-  const hash = archiveOriginal(filePath, original)
+  const original = await readFile(filePath)
+  const hash = await archiveOriginal(filePath, original)
   const bytes = await maybeRecoverDocBytes(filePath, original)
   pushRecent(filePath)
-  docWritablePaths.add(filePath)
+  allowDocWrite(wcId, filePath)
+  // record the on-disk file, not the recovery copy: what matters is what save would overwrite
+  await rememberDiskState(wcId, filePath, original)
   return {
     path: filePath,
     name: basename(filePath),
@@ -2266,48 +2466,6 @@ const TWIPS_PER_INCH = 1440
 
 const SETTINGS_PATH = () => userDataPath('ai-settings.json')
 
-// ── Auto-reload externo (fork) ──────────────────────────────────────────
-// O agente Hermes pode editar o arquivo por fora (engines headless via MCP).
-// O renderer registra o path aberto; o main vigia o arquivo e emite
-// 'docx:external-change' quando ele muda por fora. O guard anti-loop (o
-// próprio save do app também toca o arquivo) fica no renderer, que conhece
-// o momento exato de cada save.
-const trackedDocx: {
-  watcher: FSWatcher | null
-  wc: Electron.WebContents | null
-  path: string
-  debounceTimer: NodeJS.Timeout | null
-} = { watcher: null, wc: null, path: '', debounceTimer: null }
-
-function stopTrackingDocx(): void {
-  trackedDocx.watcher?.close()
-  trackedDocx.watcher = null
-  trackedDocx.wc = null
-  trackedDocx.path = ''
-  if (trackedDocx.debounceTimer) clearTimeout(trackedDocx.debounceTimer)
-  trackedDocx.debounceTimer = null
-}
-
-function registerDocxTrackIpc(): void {
-  ipcMain.handle('docx:track-file', (event, path?: string) => {
-    stopTrackingDocx()
-    if (!path || !existsSync(path)) return
-    const dir = dirname(path)
-    const base = basename(path)
-    trackedDocx.path = path
-    trackedDocx.wc = event.sender
-    trackedDocx.watcher = watch(dir, (_ev, filename) => {
-      if (filename !== base) return
-      // debounce: agrupa rajadas (saves atômicos, múltiplos eventos do FS)
-      if (trackedDocx.debounceTimer) return
-      trackedDocx.debounceTimer = setTimeout(() => {
-        trackedDocx.debounceTimer = null
-        trackedDocx.wc?.send('docx:external-change', trackedDocx.path)
-      }, 400)
-    })
-  })
-}
-
 const activeAiStreams = new Map<string, AbortController>()
 
 /**
@@ -2316,25 +2474,18 @@ const activeAiStreams = new Map<string, AbortController>()
  * sheets' standalone AI handlers use the same channel names.
  */
 export function registerAiIpc(): void {
-  registerDocxTrackIpc()
-  // Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat)
-  ipcMain.handle('app:open-path', (_event, path: unknown) => {
-    if (typeof path !== 'string' || !path) return false
-    void shell.openPath(path)
-    return true
-  })
   ipcMain.handle('ai:get-settings', (): AiSettings => {
     const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(SETTINGS_PATH(), {})
     const settings = resolveAiSettings(stored, defaultAiSettings())
-    // AI features all go through Hermes (gsk login); legacy settings with another provider are reset
+    // AI features all go through Genspark (gsk login); legacy settings with another provider are reset
     settings.provider = 'hermes'
     return settings
   })
 
-  // Hermes account (gsk login state): auth source for AI features; the frontend uses it to prompt login when logged out
+  // Genspark account (gsk login state): auth source for AI features; the frontend uses it to prompt login when logged out
   ipcMain.handle(
     'ai:gsk-status',
-    async (_event, withEmail?: boolean): Promise<GatewayAccountStatus> => {
+    async (_event, withEmail?: boolean): Promise<GenSparkAccountStatus> => {
       if (!hasGskAuth()) return { loggedIn: false }
       if (!withEmail) return { loggedIn: true }
       const info = await gskLoginInfo()
@@ -2343,7 +2494,7 @@ export function registerAiIpc(): void {
   )
 
   ipcMain.handle('ai:gsk-login', () => {
-    gskLogin()
+    ensureGenofficeLogin((url) => void shell.openExternal(url))
   })
 
   ipcMain.handle('ai:set-settings', (_event, settings: AiSettings) => {
@@ -2356,7 +2507,7 @@ export function registerAiIpc(): void {
     const maxTokens = request.maxTokens ?? 8192
     const provider = settings.provider
     let config = settings.providers?.[provider]
-    // the upstream key never enters the settings file; requests take it from the gsk login state
+    // the genspark key never enters the settings file; requests take it from the gsk login state
     if (provider === 'genspark' && config && !config.apiKey) {
       config = { ...config, apiKey: gskApiKey() }
     }
@@ -2377,27 +2528,40 @@ export function registerAiIpc(): void {
     }
     const controller = new AbortController()
     activeAiStreams.set(requestId, controller)
+    // wire-activity keepalive: lets the renderer's silence watchdog tell a slow turn from a dead one
+    let lastPing = 0
+    const ping = () => {
+      const now = Date.now()
+      if (now - lastPing < 5_000) return
+      lastPing = now
+      send({ requestId, type: 'ping' })
+    }
     try {
-      await streamForProvider(
-        provider,
-        config,
-        system,
-        messages,
-        tools,
-        maxTokens,
-        {
-          signal: controller.signal,
-          onDelta: (text) => send({ requestId, type: 'delta', text }),
-          onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
+      let stopReason: string | undefined
+      await streamForProvider(provider, config, system, messages, tools, maxTokens, {
+        signal: controller.signal,
+        onDelta: (text) => send({ requestId, type: 'delta', text }),
+        onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
+        onActivity: ping,
+        onStopReason: (reason) => {
+          stopReason = reason
         },
-        request.sessionId,
-      )
-      send({ requestId, type: 'done' })
+      })
+      send({ requestId, type: 'done', stopReason })
     } catch (err) {
       if (controller.signal.aborted) {
         send({ requestId, type: 'done' })
       } else {
-        send({ requestId, type: 'error', error: err instanceof Error ? err.message : String(err) })
+        send({
+          requestId,
+          type: 'error',
+          error: err instanceof Error ? err.message : String(err),
+          ...(err instanceof AiTimeoutError
+            ? { errorCode: 'timeout' as const }
+            : err instanceof AiCreditsError
+              ? { errorCode: 'credits' as const }
+              : {}),
+        })
       }
     } finally {
       activeAiStreams.delete(requestId)
@@ -2431,10 +2595,9 @@ export function registerAiIpc(): void {
       try {
         // the URL originates from AI tool calls (prompt-injectable via web search
         // results), so refuse non-http schemes and private/link-local targets;
-        // redirects are followed manually so every hop is validated too
-        const resp = await fetchWithSsrfGuard(String(url), {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-        })
+        // redirects are followed manually so every hop is validated too.
+        // fetchRemoteImage adds CDN-friendly headers and transient-error retries.
+        const resp = await fetchRemoteImage(String(url))
         if (!resp || !resp.ok) return null
         const buf = Buffer.from(await resp.arrayBuffer())
         const ct = resp.headers.get('content-type') ?? ''
@@ -2659,57 +2822,6 @@ export function registerProjectIpc(): void {
   ipcMain.handle('project:timeline', (_event, args: { projectId: string; limit?: number }) => {
     return getProjectStore().getProjectTimeline(args.projectId, args.limit ?? 20)
   })
-
-  /** Save a trusted agent proposal without mutating the target document */
-  ipcMain.handle(
-    'project:proposal:save',
-    (_event, args: { change: Parameters<ProjectStore['saveProposedChange']>[0] }) => {
-      return getProjectStore().saveProposedChange(args.change)
-    },
-  )
-
-  /** Advance proposal lifecycle status */
-  ipcMain.handle(
-    'project:proposal:updateStatus',
-    (
-      _event,
-      args: {
-        projectId: string
-        proposalId: string
-        status: Parameters<ProjectStore['updateProposedChangeStatus']>[2]
-      },
-    ) => {
-      return getProjectStore().updateProposedChangeStatus(
-        args.projectId,
-        args.proposalId,
-        args.status,
-      )
-    },
-  )
-
-  /** List proposal audit records */
-  ipcMain.handle('project:proposal:list', (_event, args: { projectId: string; limit?: number }) => {
-    return getProjectStore().listProposedChanges(args.projectId, args.limit ?? 100)
-  })
-
-  /** Upsert a typed document graph edge */
-  ipcMain.handle(
-    'project:graph:upsertReference',
-    (
-      _event,
-      args: {
-        projectId: string
-        reference: Parameters<ProjectStore['upsertDocumentReference']>[1]
-      },
-    ) => {
-      return getProjectStore().upsertDocumentReference(args.projectId, args.reference)
-    },
-  )
-
-  /** List typed document graph edges */
-  ipcMain.handle('project:graph:listReferences', (_event, args: { projectId: string }) => {
-    return getProjectStore().listDocumentReferences(args.projectId)
-  })
 }
 
 /** document/attachment/window IPC (everything except the AI proxy above) */
@@ -2725,10 +2837,10 @@ export function registerDocsIpc(): void {
       properties: ['openFile'],
     })
     if (result.canceled || result.filePaths.length === 0) return null
-    return loadDocx(result.filePaths[0])
+    return loadDocx(result.filePaths[0], event.sender.id)
   })
 
-  ipcMain.handle('docs:open-path', (_event, filePath: string) => loadDocx(filePath))
+  ipcMain.handle('docs:open-path', (event, filePath: string) => loadDocx(filePath, event.sender.id))
 
   ipcMain.handle('docs:consume-pending-open', (event) => {
     rendererReady = true
@@ -2736,11 +2848,11 @@ export function registerDocsIpc(): void {
     const queued = pendingWindowOpens.get(event.sender.id)
     if (queued) {
       pendingWindowOpens.delete(event.sender.id)
-      return loadDocx(queued)
+      return loadDocx(queued, event.sender.id)
     }
     const filePath = pendingOpenPath
     pendingOpenPath = null
-    return filePath ? loadDocx(filePath) : null
+    return filePath ? loadDocx(filePath, event.sender.id) : null
   })
 
   /** returns true when this tab was opened via "New Document" and should start blank */
@@ -2753,27 +2865,75 @@ export function registerDocsIpc(): void {
     return false
   })
 
-  ipcMain.handle('docs:save', (_event, filePath: string, data: ArrayBuffer) => {
-    try {
-      // only paths the user opened or chose via save-as may be overwritten
-      if (typeof filePath !== 'string' || !docWritablePaths.has(filePath)) {
-        return { ok: false, error: 'save target is not an opened document' }
+  ipcMain.handle(
+    'docs:save',
+    async (event, filePath: string, data: ArrayBuffer, auto?: boolean) => {
+      try {
+        // only paths this renderer opened or chose via save-as may be overwritten
+        if (typeof filePath !== 'string' || !canDocWrite(event.sender.id, filePath)) {
+          return { ok: false, error: 'save target is not an opened document' }
+        }
+        if (await diskChangedExternally(event.sender.id, filePath)) {
+          // autosave must never clobber another program's edits silently; the
+          // renderer stays dirty and the next manual save raises the dialog
+          if (auto === true) return { ok: false, reason: 'external-modified' }
+          const options = {
+            type: 'warning' as const,
+            message: tm('extModifiedMsg'),
+            detail: tm('extModifiedDetail'),
+            buttons: [tm('btnOverwrite'), tm('btnCancel')],
+            defaultId: 0,
+            cancelId: 1,
+            noLink: true,
+          }
+          const parent = dialogParent(event)
+          const { response } =
+            parent && !parent.isDestroyed()
+              ? await dialog.showMessageBox(parent, options)
+              : await dialog.showMessageBox(options)
+          if (response !== 0) return { ok: false, reason: 'external-modified' }
+        }
+        // The tab may have been closed while the external-change check or the
+        // overwrite prompt was pending: a Don't Save close revoked this tab's
+        // grants, and landing the write now would persist discarded edits.
+        if (tornDownWcIds.has(event.sender.id) || !canDocWrite(event.sender.id, filePath)) {
+          return { ok: false, error: 'save target is not an opened document' }
+        }
+        const bytes = Buffer.from(data)
+        await atomicWriteFile(filePath, bytes)
+        await rememberDiskState(event.sender.id, filePath, bytes)
+        clearRecoveryCopy(filePath)
+        pushRecent(filePath)
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: String(err) }
       }
-      writeFileSync(filePath, Buffer.from(data))
-      clearRecoveryCopy(filePath)
-      pushRecent(filePath)
-      return { ok: true }
-    } catch (err) {
-      return { ok: false, error: String(err) }
-    }
-  })
+    },
+  )
 
   // crash-recovery copy from a dirty renderer; best-effort, never surfaces
-  ipcMain.handle('docs:write-recovery', (_event, filePath: string, data: ArrayBuffer) => {
+  ipcMain.handle('docs:write-recovery', async (event, filePath: string, data: ArrayBuffer) => {
     try {
-      if (typeof filePath !== 'string' || !docWritablePaths.has(filePath)) return { ok: false }
-      mkdirSync(recoveryDir(), { recursive: true })
-      writeFileSync(recoveryPathFor(filePath), Buffer.from(data))
+      if (tornDownWcIds.has(event.sender.id)) return { ok: false }
+      if (typeof filePath !== 'string' || !canDocWrite(event.sender.id, filePath))
+        return { ok: false }
+      // snapshot before any await: a save or discard that clears the recovery
+      // copy while this write is in flight bumps the epoch and invalidates it
+      const epoch = recoveryClearEpochs.get(filePath) ?? 0
+      await mkdir(recoveryDir(), { recursive: true })
+      await atomicWriteFile(recoveryPathFor(filePath), Buffer.from(data))
+      // The tab may have been closed ("Don't Save" clears the copy, teardown
+      // revokes access) or the document saved (docs:save clears the copy) while
+      // the write was in flight. A write that lost either race would offer
+      // discarded or already-saved content as recovery on the next open — undo it.
+      if (
+        tornDownWcIds.has(event.sender.id) ||
+        !canDocWrite(event.sender.id, filePath) ||
+        (recoveryClearEpochs.get(filePath) ?? 0) !== epoch
+      ) {
+        clearRecoveryCopy(filePath)
+        return { ok: false }
+      }
       return { ok: true }
     } catch {
       return { ok: false }
@@ -2781,15 +2941,22 @@ export function registerDocsIpc(): void {
   })
 
   ipcMain.handle('docs:save-as', async (event, defaultName: string, data: ArrayBuffer) => {
+    // an orphaned (closed-tab) renderer must not open dialogs or land new files
+    if (tornDownWcIds.has(event.sender.id)) return { ok: false }
     const result = await saveDialog(event, {
       title: tm('dlgSaveAs'),
       defaultPath: defaultName,
       filters: [{ name: tm('filterWord'), extensions: ['docx'] }],
     })
     if (result.canceled || !result.filePath) return { ok: false }
+    // the tab may have been closed while the dialog was open; checked before the
+    // write because Save As may overwrite an existing file (no safe rollback)
+    if (tornDownWcIds.has(event.sender.id)) return { ok: false }
     try {
-      writeFileSync(result.filePath, Buffer.from(data))
-      docWritablePaths.add(result.filePath)
+      const bytes = Buffer.from(data)
+      await atomicWriteFile(result.filePath, bytes)
+      allowDocWrite(event.sender.id, result.filePath)
+      await rememberDiskState(event.sender.id, result.filePath, bytes)
       pushRecent(result.filePath)
       notifyFileSaved(event.sender, result.filePath)
       return { ok: true, path: result.filePath }
@@ -2798,11 +2965,22 @@ export function registerDocsIpc(): void {
     }
   })
 
-  ipcMain.handle('docs:save-new', (event, defaultName: string, data: ArrayBuffer) => {
+  ipcMain.handle('docs:save-new', async (event, defaultName: string, data: ArrayBuffer) => {
     try {
+      // a discarded draft in an orphaned renderer must not silently persist
+      // itself to the default folder after the user chose Don't Save
+      if (tornDownWcIds.has(event.sender.id)) return { ok: false }
       const filePath = uniquePathIn(defaultSaveDir(), defaultName)
-      writeFileSync(filePath, Buffer.from(data))
-      docWritablePaths.add(filePath)
+      const bytes = Buffer.from(data)
+      await atomicWriteFile(filePath, bytes)
+      // teardown may have happened while the write was in flight — the path is
+      // freshly created, so rolling it back is safe (mirrors docs:write-recovery)
+      if (tornDownWcIds.has(event.sender.id)) {
+        await unlink(filePath).catch(() => {})
+        return { ok: false }
+      }
+      allowDocWrite(event.sender.id, filePath)
+      await rememberDiskState(event.sender.id, filePath, bytes)
       pushRecent(filePath)
       notifyFileSaved(event.sender, filePath)
       return { ok: true, path: filePath }
@@ -2921,7 +3099,11 @@ export function registerDocsIpc(): void {
       pageHeightTwips: number,
       outPath?: string,
     ) => {
+      // renderer-supplied outPath is only honored when a save dialog authorized it before
       let filePath = outPath ?? null
+      if (filePath && !canPdfWrite(event.sender.id, filePath)) {
+        return { ok: false, error: 'export target is not an authorized path' }
+      }
       if (!filePath) {
         const result = await saveDialog(event, {
           title: tm('dlgExportPdf'),
@@ -2930,6 +3112,7 @@ export function registerDocsIpc(): void {
         })
         if (result.canceled || !result.filePath) return { ok: false }
         filePath = result.filePath
+        allowPdfWrite(event.sender.id, filePath)
       }
       try {
         const data = await event.sender.printToPDF({
@@ -2974,6 +3157,9 @@ export function registerDocsIpc(): void {
     'docs:save-merged-pdf',
     async (event, defaultName: string, base64Parts: string[], outPath?: string) => {
       let filePath = outPath ?? null
+      if (filePath && !canPdfWrite(event.sender.id, filePath)) {
+        return { ok: false, error: 'export target is not an authorized path' }
+      }
       if (!filePath) {
         const result = await saveDialog(event, {
           title: tm('dlgExportPdf'),
@@ -2982,6 +3168,7 @@ export function registerDocsIpc(): void {
         })
         if (result.canceled || !result.filePath) return { ok: false }
         filePath = result.filePath
+        allowPdfWrite(event.sender.id, filePath)
       }
       try {
         const { PDFDocument } = await import('pdf-lib')
@@ -3257,7 +3444,7 @@ export function buildDocsMenu(): void {
         { label: tm('menuMacros'), enabled: false },
       ],
     },
-    { label: tm('menuWindow'), role: 'windowMenu' },
+    windowMenuTemplate(process.platform, appMenuLabels(getUiLang())),
     {
       label: tm('menuHelp'),
       role: 'help',
@@ -3330,6 +3517,7 @@ export function createDocsWindow(openPath?: string): BrowserWindow {
   })
   win.on('closed', () => {
     pendingWindowOpens.delete(webContentsId)
+    dropDocWriter(webContentsId)
     // release any close-guard waiter still keyed on the gone webContents
     closeCheckWaiters.get(webContentsId)?.({ dirty: false, autoSave: false })
     closeCheckWaiters.delete(webContentsId)
@@ -3382,10 +3570,15 @@ ipcMain.on('docs:close-save-result', (event, ok: unknown) => {
 
 /** Ask the renderer for pre-close state (dirty flag + autosave switch); no reply within 2s
  * fails CLOSED — a busy or wedged renderer may well hold unsaved changes, so the caller
- * prompts instead of closing silently. */
+ * prompts instead of closing silently. Concurrent callers share one query: a second
+ * request must not overwrite the pending waiter (that stranded the first until timeout). */
+const closeStateQueries = new Map<number, Promise<DocsCloseState>>()
+
 function queryCloseState(contents: WebContents): Promise<DocsCloseState> {
   if (contents.isDestroyed()) return Promise.resolve({ dirty: false, autoSave: false })
-  return new Promise((resolve) => {
+  const pending = closeStateQueries.get(contents.id)
+  if (pending) return pending
+  const query = new Promise<DocsCloseState>((resolve) => {
     const timer = setTimeout(() => {
       closeCheckWaiters.delete(contents.id)
       resolve({ dirty: true, autoSave: false, unresponsive: true })
@@ -3395,7 +3588,9 @@ function queryCloseState(contents: WebContents): Promise<DocsCloseState> {
       resolve(state)
     })
     contents.send('docs:close-check')
-  })
+  }).finally(() => closeStateQueries.delete(contents.id))
+  closeStateQueries.set(contents.id, query)
+  return query
 }
 
 export async function docsQueryDirty(contents: WebContents): Promise<boolean> {
@@ -3423,7 +3618,24 @@ function requestRendererSave(contents: WebContents): Promise<boolean> {
  * to run the full save flow (new documents open Save As) and await the result;
  * failure/cancel/timeout keeps the document open.
  */
-export async function requestDocsClose(
+export function requestDocsClose(
+  contents: WebContents,
+  parent?: BrowserWindow | null,
+): Promise<boolean> {
+  // re-entry (close clicked again while the prompt is up) joins the same flow
+  // instead of stacking dialogs / stranding the first waiter
+  const pending = docsCloseRequests.get(contents.id)
+  if (pending) return pending
+  const request = performDocsClose(contents, parent).finally(() =>
+    docsCloseRequests.delete(contents.id),
+  )
+  docsCloseRequests.set(contents.id, request)
+  return request
+}
+
+const docsCloseRequests = new Map<number, Promise<boolean>>()
+
+async function performDocsClose(
   contents: WebContents,
   parent?: BrowserWindow | null,
 ): Promise<boolean> {
@@ -3503,6 +3715,7 @@ export function createDocsView(openPath?: string): WebContentsView {
   const wcId = view.webContents.id
   view.webContents.once('destroyed', () => {
     pendingWindowOpens.delete(wcId)
+    dropDocWriter(wcId)
     closeCheckWaiters.get(wcId)?.({ dirty: false, autoSave: false })
     closeCheckWaiters.delete(wcId)
     closeSaveWaiters.get(wcId)?.(false)
@@ -3520,6 +3733,7 @@ export function hasDocsWindow(): boolean {
 
 export function startDocsStandalone(): void {
   installNavigationGuard(app)
+  installContextMenu(app, () => contextMenuLabels(getUiLang()))
   // dev runs must not share the packaged app's userData (recent files, AI settings)
   // or its single-instance lock — otherwise `npm run dev` silently quits whenever
   // the installed HermesOffice Docs is open and forwards its argv there instead.

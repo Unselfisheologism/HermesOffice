@@ -22,7 +22,7 @@ import type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GatewayAccountStatus,
+  GenSparkAccountStatus,
 } from '@hermesoffice/ai-provider'
 
 export type {
@@ -34,7 +34,7 @@ export type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GatewayAccountStatus,
+  GenSparkAccountStatus,
 } from '@hermesoffice/ai-provider'
 export { AI_PROVIDERS } from '@hermesoffice/ai-provider'
 
@@ -150,14 +150,18 @@ export interface DesktopApi {
   onOpenDocx(handler: (result: OpenFileResult) => void): () => void
   /** File was renamed externally (renamed in the shell Home list) — pushes old and new paths; renderer syncs its save path and title bar */
   onRenamedDocx(handler: (paths: { oldPath: string; newPath: string }) => void): () => void
-  /** Fork: vigia o arquivo aberto; dispara quando ele muda por fora (agente Hermes) */
-  trackDocxFile(path: string): Promise<void>
-  onDocxExternalChange(handler: (path: string) => void): () => void
-  /** Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat) */
-  openPath(path: string): Promise<boolean>
-  saveDocx(path: string, data: ArrayBuffer): Promise<{ ok: boolean; error?: string }>
+  /** auto=true marks an autosave: an externally modified file then fails with
+   *  reason 'external-modified' instead of prompting (manual saves get an
+   *  Overwrite/Cancel dialog in the main process) */
+  saveDocx(
+    path: string,
+    data: ArrayBuffer,
+    auto?: boolean,
+  ): Promise<{ ok: boolean; error?: string; reason?: 'external-modified' }>
   /** crash-recovery copy of a dirty document, stored under userData */
   writeRecoveryCopy(path: string, data: ArrayBuffer): Promise<{ ok: boolean }>
+  /** tab closed but webContents kept alive (shell freeze workaround) — stop background timers */
+  onTeardown(handler: () => void): () => void
   saveDocxAs(
     defaultName: string,
     data: ArrayBuffer,
@@ -173,7 +177,8 @@ export interface DesktopApi {
   setAiSettings(settings: AiSettings): Promise<void>
   /** system print dialog for the current window */
   print(): Promise<void>
-  /** render the document to PDF and ask where to save; size in twips */
+  /** render the document to PDF and ask where to save; size in twips.
+   *  outPath is only honored when a previous export dialog chose that exact path */
   exportPdf(
     defaultName: string,
     pageWidthTwips: number,
@@ -185,7 +190,8 @@ export interface DesktopApi {
     pageWidthTwips: number,
     pageHeightTwips: number,
   ): Promise<{ ok: boolean; base64?: string; error?: string }>
-  /** Merge grouped PDF fragments in order and write to disk (missing outPath opens the save dialog) */
+  /** Merge grouped PDF fragments in order and write to disk (missing outPath opens
+   *  the save dialog; a given outPath must come from a previous export dialog) */
   saveMergedPdf(
     defaultName: string,
     base64Parts: string[],
@@ -195,10 +201,10 @@ export interface DesktopApi {
   /** start a streaming AI call; deltas arrive via onAiStream with the same requestId */
   aiStream(request: AiStreamRequest): Promise<void>
   aiStreamCancel(requestId: string): Promise<void>
-  /** Hermes account status (gsk login state); withEmail also returns the email (needs a network request, slower) */
-  aiGatewayStatus(withEmail?: boolean): Promise<GatewayAccountStatus>
-  /** Open the browser to log in to Hermes (fire-and-forget; aiGatewayStatus flips to logged-in when done) */
-  aiGatewayLogin(): Promise<void>
+  /** Genspark account status (gsk login state); withEmail also returns the email (needs a network request, slower) */
+  aiGskStatus(withEmail?: boolean): Promise<GenSparkAccountStatus>
+  /** Open the browser to log in to Genspark (fire-and-forget; aiGskStatus flips to logged-in when done) */
+  aiGskLogin(): Promise<void>
   webSearch(
     query: string,
     maxResults?: number,
@@ -206,6 +212,8 @@ export interface DesktopApi {
     results: Array<{ title: string; url: string; snippet: string }>
     answer?: string
     method: string
+    /** failure reason when method === 'error' */
+    error?: string
   }>
   imageSearch(
     query: string,
@@ -220,6 +228,8 @@ export interface DesktopApi {
       height?: number
     }>
     method: string
+    /** failure reason when method === 'error' */
+    error?: string
   }>
   fetchImage(url: string): Promise<{ base64: string; mime: string } | null>
   /** file picker for chat attachments (multi-select) */

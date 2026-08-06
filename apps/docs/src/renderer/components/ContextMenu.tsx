@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/core'
 import { useI18n, type StringKey } from '../i18n/locale'
-import { fontFamiliesFor } from '../font-list'
+import { fontFamiliesFor, isEastAsianFontName } from '../font-list'
 import { cssFontFamily } from '../line-metrics'
 import { setParaAttrs, activeParaAttrs } from './ribbon-tabs'
+import { setSelectionAlign } from '../editor/direction'
 import { IconSparkle } from './icons'
+import { useModalKeys } from './modal-keys'
 
 /**
  * Editor context menu (right click in the document body):
@@ -64,6 +66,7 @@ export function EditorContextMenu({
 
   const { from, to } = editor.state.selection
   const hasSelection = from !== to
+  const canEdit = editor.isEditable
   const selectedText = hasSelection ? editor.state.doc.textBetween(from, to, ' ').trim() : ''
   // Synonyms targets a word / short phrase, not long selections
   const synonymText = selectedText.length > 0 && selectedText.length <= 20 ? selectedText : ''
@@ -198,7 +201,7 @@ export function EditorContextMenu({
     >
       {item(t('appCut'), {
         key: '⌘X',
-        disabled: !hasSelection,
+        disabled: !hasSelection || !canEdit,
         onClick: run(() => void clipboard('cut')),
       })}
       {item(t('appCopy'), {
@@ -206,8 +209,15 @@ export function EditorContextMenu({
         disabled: !hasSelection,
         onClick: run(() => void clipboard('copy')),
       })}
-      {item(t('appPaste'), { key: '⌘V', onClick: run(() => void clipboard('paste')) })}
-      {item(t('appPastePlain'), { onClick: run(() => void clipboard('pastePlain')) })}
+      {item(t('appPaste'), {
+        key: '⌘V',
+        disabled: !canEdit,
+        onClick: run(() => void clipboard('paste')),
+      })}
+      {item(t('appPastePlain'), {
+        disabled: !canEdit,
+        onClick: run(() => void clipboard('pastePlain')),
+      })}
       <div className="ctx-sep" />
       {item(t('appFontMenu'), { key: '⌘D', onClick: run(onFontDialog) })}
       {item(t('appParagraphMenu'), { key: '⌥⌘M', onClick: run(onParagraphDialog) })}
@@ -315,6 +325,7 @@ const FONT_STYLES: Array<{ key: string; nameKey: StringKey }> = [
 
 export function FontDialog({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t, lang } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const fontFamilies = fontFamiliesFor(lang)
   const textAttrs = editor.getAttributes('docTextStyle')
   const initialStyle = editor.isActive('bold')
@@ -325,7 +336,9 @@ export function FontDialog({ editor, onClose }: { editor: Editor; onClose: () =>
       ? 'italic'
       : 'regular'
 
-  const [font, setFont] = useState((textAttrs.font as string | null) ?? '')
+  const [font, setFont] = useState(
+    (textAttrs.font as string | null) ?? (textAttrs.fontAscii as string | null) ?? '',
+  )
   const [size, setSize] = useState(
     textAttrs.sizeHalfPoints ? Number(textAttrs.sizeHalfPoints) / 2 : 11,
   )
@@ -336,6 +349,10 @@ export function FontDialog({ editor, onClose }: { editor: Editor; onClose: () =>
   const [vertAlign, setVertAlign] = useState<string>((textAttrs.vertAlign as string | null) ?? '')
 
   const apply = () => {
+    if (!editor.isEditable) {
+      onClose()
+      return
+    }
     const hex = color.replace('#', '').toUpperCase()
     let chain = editor
       .chain()
@@ -343,7 +360,12 @@ export function FontDialog({ editor, onClose }: { editor: Editor; onClose: () =>
       .setMark('docTextStyle', {
         color: hex === '000000' ? null : hex,
         sizeHalfPoints: Math.round(size * 2),
-        font: font || null,
+        // picks target only their script's rFonts slot; the other slot survives
+        ...(!font
+          ? { font: null, fontAscii: null }
+          : isEastAsianFontName(font)
+            ? { font }
+            : { fontAscii: font }),
         highlight: textAttrs.highlight ?? null,
         vertAlign: vertAlign || null,
       })
@@ -358,7 +380,12 @@ export function FontDialog({ editor, onClose }: { editor: Editor; onClose: () =>
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      className="modal-backdrop"
+      ref={modalKeys.ref}
+      onKeyDown={modalKeys.onKeyDown}
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
       <div className="modal">
         <h2>{t('appFontDialogTitle')}</h2>
         <div className="font-dialog-row">
@@ -467,8 +494,11 @@ export function FontDialog({ editor, onClose }: { editor: Editor; onClose: () =>
 
 const PT_PER_TWIP = 1 / 20
 
-const ALIGN_OPTIONS: Array<{ key: string; nameKey: StringKey }> = [
-  { key: '', nameKey: 'appAlignLeft' },
+type AlignValue = 'left' | 'center' | 'right' | 'justify'
+
+/** visual alignment values; setSelectionAlign resolves them per paragraph direction */
+const ALIGN_OPTIONS: Array<{ key: AlignValue; nameKey: StringKey }> = [
+  { key: 'left', nameKey: 'appAlignLeft' },
   { key: 'center', nameKey: 'appAlignCenter' },
   { key: 'right', nameKey: 'appAlignRight' },
   { key: 'justify', nameKey: 'appAlignJustify' },
@@ -485,8 +515,12 @@ const LINE_SPACINGS: Array<{ value: number; nameKey: StringKey }> = [
 
 export function ParagraphDialog({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const attrs = activeParaAttrs(editor)
-  const [align, setAlign] = useState<string>((attrs.align as string | null) ?? '')
+  // unset align means "start": visually left in LTR, right in RTL (same as the ribbon)
+  const [align, setAlign] = useState<AlignValue>(
+    (attrs.align as AlignValue | null) ?? (attrs.bidi === true ? 'right' : 'left'),
+  )
   // Line spacing rule: multiples are the preset select values; 'atLeast'/'exact'
   // take a pt value (w:spacing w:lineRule + w:line, already modeled by parse/save)
   const rawTwips = Number(attrs.lineRawTwips) || 0
@@ -505,6 +539,10 @@ export function ParagraphDialog({ editor, onClose }: { editor: Editor; onClose: 
   const [spaceAfter, setSpaceAfter] = useState(twipsToPt(attrs.spaceAfter))
 
   const apply = () => {
+    if (!editor.isEditable) {
+      onClose()
+      return
+    }
     const ptToTwips = (pt: number) => (pt > 0 ? Math.round(pt / PT_PER_TWIP) : null)
     const spacing =
       lineRule === 'exact' || lineRule === 'atLeast'
@@ -514,8 +552,10 @@ export function ParagraphDialog({ editor, onClose }: { editor: Editor; onClose: 
             lineRule: null,
             lineRawTwips: null,
           }
+    // align goes through setSelectionAlign so each paragraph resolves the
+    // visual value against its own direction (null = start side)
+    setSelectionAlign(editor, align)
     setParaAttrs(editor, {
-      align: align || null,
       ...spacing,
       indentLeft: ptToTwips(indentLeft),
       indentRight: ptToTwips(indentRight),
@@ -543,13 +583,18 @@ export function ParagraphDialog({ editor, onClose }: { editor: Editor; onClose: 
   )
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      className="modal-backdrop"
+      ref={modalKeys.ref}
+      onKeyDown={modalKeys.onKeyDown}
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
       <div className="modal">
         <h2>{t('appParagraph')}</h2>
         <div className="font-dialog-row">
           <label>
             {t('appAlignment')}
-            <select value={align} onChange={(e) => setAlign(e.target.value)}>
+            <select value={align} onChange={(e) => setAlign(e.target.value as AlignValue)}>
               {ALIGN_OPTIONS.map((o) => (
                 <option key={o.key} value={o.key}>
                   {t(o.nameKey)}

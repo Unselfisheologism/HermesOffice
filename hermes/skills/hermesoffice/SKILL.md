@@ -18,8 +18,8 @@ treat each session as one continuing conversation about one document.
    user's window, with undo/rollback and (in sheets) reviewable previews.
    **Always prefer them when present.**
 2. **File-level tools** (your own filesystem/document tools, e.g.
-   `genoffice_extract_text`, `genoffice_docx_create`, `genoffice_docx_patch`,
-   `genoffice_app_open_file`): use them when the in-app tools are not in the
+   `hermesoffice_extract_text`, `hermesoffice_docx_create`, `hermesoffice_docx_patch`,
+   `hermesoffice_app_open_file`): use them when the in-app tools are not in the
    list, or when the task creates a _new_ file (reports, exports).
 
 ## The save-and-reload contract
@@ -32,7 +32,7 @@ the window are at stake. Rules:
 - Never rewrite the open file wholesale; patch narrowly (the suite's
   round-trip philosophy: untouched content must survive byte-for-byte).
 - For new artifacts, write a **new** file next to the source and open it
-  with `genoffice_app_open_file`; reply with the file path so it becomes a
+  with `hermesoffice_app_open_file`; reply with the file path so it becomes a
   clickable link in the chat.
 
 ## Conduct

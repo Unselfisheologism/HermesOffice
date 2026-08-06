@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import { parseChartPartXml } from './chart'
 import { findInkRuns, stripInkRuns } from './ink'
+import { computeListMarkers, type ListItemRef } from './list-markers'
 import { ommlFragmentsOf, ommlToLatex, ommlToMathML } from './math'
 import { splitXmlChildren } from './generate'
 import { NOTE_PART_PATH, parseNotesXml } from './notes'
@@ -58,6 +59,40 @@ import {
   type XNode,
 } from './xml-utils'
 
+const MAX_ZIP_PARTS = 10000
+const MAX_PART_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+const MAX_TOTAL_UNCOMPRESSED_BYTES = 1.5 * 1024 * 1024 * 1024
+
+/**
+ * Reject zip bombs before any part is inflated, using the declared
+ * uncompressed sizes from the central directory (JSZip keeps them in
+ * the lazy `_data` compressed object).
+ */
+export function assertZipWithinLimits(zip: JSZip): void {
+  const files = Object.values(zip.files).filter((f) => !f.dir)
+  if (files.length > MAX_ZIP_PARTS) {
+    throw new Error(`docx rejected: ${files.length} parts exceeds the ${MAX_ZIP_PARTS} limit`)
+  }
+  let total = 0
+  for (const file of files) {
+    const size =
+      (file as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0
+    if (size > MAX_PART_UNCOMPRESSED_BYTES) {
+      throw new Error(
+        `docx rejected: part ${file.name} declares ${size} uncompressed bytes ` +
+          `(limit ${MAX_PART_UNCOMPRESSED_BYTES})`,
+      )
+    }
+    if (size > 0) total += size
+  }
+  if (total > MAX_TOTAL_UNCOMPRESSED_BYTES) {
+    throw new Error(
+      `docx rejected: total uncompressed size ${total} exceeds the ` +
+        `${MAX_TOTAL_UNCOMPRESSED_BYTES} limit`,
+    )
+  }
+}
+
 const IMAGE_MIME: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -87,6 +122,7 @@ export interface ParseExtras {
 
 export async function parseDocx(bytes: Uint8Array): Promise<ParsedDoc & { extras: ParseExtras }> {
   const zip = await JSZip.loadAsync(bytes)
+  assertZipWithinLimits(zip)
   const docFile = zip.file('word/document.xml')
   if (!docFile) throw new Error('not a docx: missing word/document.xml')
   const documentXml = await docFile.async('string')
@@ -126,6 +162,7 @@ export async function parseDocx(bytes: Uint8Array): Promise<ParsedDoc & { extras
     styles,
     rels,
     numFormats,
+    numbering,
     chartParts,
     noteNumbers,
     themeColors: theme.colors,
@@ -163,6 +200,7 @@ export async function parseDocx(bytes: Uint8Array): Promise<ParsedDoc & { extras
     elements.push(el)
     blocks.push(await buildBlock(el, i, xml, buildCtx))
   }
+  applyTocEntryNumbers(blocks, numbering)
 
   const header = await readHeaderFooterPart(
     zip,
@@ -279,12 +317,21 @@ interface BuildContext {
   styles: Map<string, StyleInfo>
   rels: Map<string, RelInfo>
   numFormats: Map<string, 'bullet' | 'ordered'>
+  /** full per-level definitions, for level-aware kind classification */
+  numbering: Map<string, NumberingDef>
   /** collector: chart part XML seen while building blocks (partPath -> xml) */
   chartParts: Record<string, string>
   /** "footnote:<id>" / "endnote:<id>" -> display number */
   noteNumbers: Map<string, number>
   /** live palette for w:themeColor resolution, null when the doc has no theme */
   themeColors?: ThemeColors | null
+}
+
+/** bullet/ordered classification of one list level (mixed lists differ per ilvl) */
+function listKindOf(ctx: BuildContext, numId: string, ilvl: number): 'bullet' | 'ordered' {
+  const fmt = ctx.numbering.get(numId)?.levels[ilvl]?.numFmt
+  if (fmt !== undefined) return fmt === 'bullet' ? 'bullet' : 'ordered'
+  return ctx.numFormats.get(numId) ?? 'bullet'
 }
 
 /** w:color -> display hex; w:themeColor resolves against the live palette (beats stale w:val) */
@@ -596,7 +643,8 @@ async function buildBlock(
   // TOC-styled paragraphs are part of a TOC field result even when they carry
   // no field chars themselves (entries with literal page numbers). Editing
   // them individually would corrupt the field, so they stay protected.
-  if (/<w:pStyle w:val="TOC[1-9]"/.test(xml)) {
+  // Word writes styleIds "TOC1".."TOC9"; Pages exports "TOC 1"/"TOC 2" (with space).
+  if (/<w:pStyle w:val="TOC ?[1-9]"/.test(xml)) {
     return {
       ...base,
       type: 'passthrough',
@@ -720,13 +768,41 @@ async function buildBlock(
   return buildTextParagraph(base, xml, ctx)
 }
 
+/**
+ * Effective heading level 1-9 (Word TOC/outline semantics): direct pPr
+ * w:outlineLvl wins (9 = body text), then the style's level, then a built-in
+ * HeadingN styleId the document never defined.
+ */
+function headingLevelOf(
+  pPr: XNode | undefined,
+  styleId: string | undefined,
+  ctx: BuildContext,
+): number | undefined {
+  const direct = pPr ? attrsOf(findChild(pPr, 'w:outlineLvl') ?? {})['w:val'] : undefined
+  if (direct !== undefined) {
+    const lvl = parseInt(direct, 10)
+    return lvl >= 0 && lvl <= 8 ? lvl + 1 : undefined
+  }
+  if (!styleId) return undefined
+  const info = ctx.styles.get(styleId)
+  if (info) return info.headingLevel
+  const m = /^Heading([1-9])$/i.exec(styleId)
+  return m ? parseInt(m[1], 10) : undefined
+}
+
 /** parse a w:p as editable text content (paragraph / heading / listItem) */
 function buildTextParagraph(
   base: Pick<Block, 'id' | 'docxIndex' | 'originalXml'>,
   xml: string,
   ctx: BuildContext,
 ): Block {
-  const parsed = xmlParser.parse(xml) as XNode[]
+  let parsed: XNode[]
+  try {
+    parsed = xmlParser.parse(xml) as XNode[]
+  } catch {
+    // unparseable paragraph (e.g. pathological nesting): keep the original bytes
+    return { ...base, type: 'passthrough', label: 'Paragraph', previewText: plainText(xml) }
+  }
   const pNode = parsed.find((n) => nameOf(n) === 'w:p')
   if (!pNode) {
     return { ...base, type: 'passthrough', label: 'Unknown paragraph', previewText: plainText(xml) }
@@ -779,12 +855,15 @@ function buildTextParagraph(
           old.numId = oldNumId
           old.ilvl =
             parseInt(attrsOf(findChild(oldNumPr!, 'w:ilvl') ?? {})['w:val'] ?? '0', 10) || 0
-          old.kind = ctx.numFormats.get(oldNumId) ?? 'bullet'
-        } else if (oldStyleId && ctx.styles.get(oldStyleId)?.headingLevel) {
-          old.type = 'docHeading'
-          old.level = ctx.styles.get(oldStyleId)!.headingLevel
-        } else if (oldStyleId) {
-          old.type = 'docParagraph'
+          old.kind = listKindOf(ctx, oldNumId, old.ilvl)
+        } else {
+          const oldLevel = headingLevelOf(oldPPr, oldStyleId, ctx)
+          if (oldLevel) {
+            old.type = 'docHeading'
+            old.level = oldLevel
+          } else if (oldStyleId) {
+            old.type = 'docParagraph'
+          }
         }
         if (old && Object.keys(old).length > 0) pPrChangeInfo.old = old
       }
@@ -802,12 +881,13 @@ function buildTextParagraph(
     const numId = attrsOf(findChild(numPr, 'w:numId') ?? {})['w:val']
     const ilvl = attrsOf(findChild(numPr, 'w:ilvl') ?? {})['w:val'] ?? '0'
     if (numId) {
-      const kind = ctx.numFormats.get(numId) ?? 'bullet'
+      const ilvlNum = parseInt(ilvl, 10) || 0
+      const kind = listKindOf(ctx, numId, ilvlNum)
       return {
         ...base,
         type: 'listItem',
         styleId,
-        list: { kind, numId, ilvl: parseInt(ilvl, 10) || 0 },
+        list: { kind, numId, ilvl: ilvlNum },
         format,
         rawPPr,
         bookmarks,
@@ -821,23 +901,21 @@ function buildTextParagraph(
   }
 
   // heading?
-  if (styleId) {
-    const info = ctx.styles.get(styleId)
-    if (info?.headingLevel) {
-      return {
-        ...base,
-        type: 'heading',
-        level: info.headingLevel,
-        styleId,
-        format,
-        rawPPr,
-        bookmarks,
-        hiddenBookmarks,
-        commentStarts,
-        commentEnds,
-        runs,
-        ...revExtras,
-      }
+  const headingLevel = headingLevelOf(pPr, styleId, ctx)
+  if (headingLevel) {
+    return {
+      ...base,
+      type: 'heading',
+      level: headingLevel,
+      styleId,
+      format,
+      rawPPr,
+      bookmarks,
+      hiddenBookmarks,
+      commentStarts,
+      commentEnds,
+      runs,
+      ...revExtras,
     }
   }
 
@@ -1045,9 +1123,76 @@ function vmlColorHex(value: string | undefined): string | undefined {
  * fallback-stripped XML, otherwise the mc:Fallback VML twin would duplicate
  * every box.
  */
+const LINE_PRSTS_RE =
+  /<a:prstGeom[^>]*prst="(?:line|straightConnector1|bentConnector[234]|curvedConnector[234])"/
+
+/** stroke-only line/connector prsts shown as display boxes despite no text body */
+const LINE_PRSTS = new Set([
+  'line',
+  'straightConnector1',
+  'bentConnector2',
+  'bentConnector3',
+  'bentConnector4',
+  'curvedConnector2',
+  'curvedConnector3',
+  'curvedConnector4',
+])
+
+/** wps line shape → display-only line box (synthetic prst carries the arrow ends) */
+function lineBoxOf(shape: XNode): TextboxDisplay | null {
+  const spPr = findChild(shape, 'wps:spPr')
+  if (!spPr) return null
+  const prst = attrsOf(findChild(spPr, 'a:prstGeom') ?? {})['prst']
+  if (!prst || !LINE_PRSTS.has(prst)) return null
+  const box: TextboxDisplay = { paras: [], readOnly: true }
+  const ln = findChild(spPr, 'a:ln')
+  const border = ln
+    ? attrsOf(findChild(findChild(ln, 'a:solidFill') ?? {}, 'a:srgbClr') ?? {})['val']
+    : undefined
+  box.borderColor = border ?? '000000'
+  const arrowEnd = (name: string): boolean => {
+    const type = attrsOf(findChild(ln ?? {}, name) ?? {})['type']
+    return !!type && type !== 'none'
+  }
+  const head = arrowEnd('a:headEnd')
+  const tail = arrowEnd('a:tailEnd')
+  box.prst = prst.startsWith('bentConnector')
+    ? 'lineBent'
+    : prst.startsWith('curvedConnector')
+      ? 'lineCurved'
+      : head && tail
+        ? 'lineArrowDouble'
+        : head || tail
+          ? 'lineArrow'
+          : 'line'
+  const ext = findChild(findChild(spPr, 'a:xfrm') ?? {}, 'a:ext')
+  const cx = ext ? parseInt(attrsOf(ext)['cx'] ?? '', 10) : NaN
+  const cy = ext ? parseInt(attrsOf(ext)['cy'] ?? '', 10) : NaN
+  if (Number.isFinite(cx) && cx > 0) box.widthPx = Math.round(cx / EMU_PER_PX)
+  if (Number.isFinite(cy) && cy > 0) {
+    box.heightPx = Math.round(cy / EMU_PER_PX)
+    box.minHeightPx = box.heightPx
+  } else {
+    // zero-height extent = Word's horizontal line; keep a 12 px grab band
+    box.heightPx = 12
+  }
+  box.insetTopPx = 0
+  box.insetRightPx = 0
+  box.insetBottomPx = 0
+  box.insetLeftPx = 0
+  return box
+}
+
 function extractTextboxes(xml: string, ctx: BuildContext): TextboxDisplay[] {
-  if (!xml.includes('<w:txbxContent')) return []
-  const parsed = xmlParser.parse(xml) as XNode[]
+  // wrapSquare gate keeps converter-emitted decorative rules on the thin-rule path
+  const hasLineShapes = xml.includes('<wp:wrapSquare') && LINE_PRSTS_RE.test(xml)
+  if (!xml.includes('<w:txbxContent') && !hasLineShapes) return []
+  let parsed: XNode[]
+  try {
+    parsed = xmlParser.parse(xml) as XNode[]
+  } catch {
+    return []
+  }
   const shapes: XNode[] = []
   collectNodes(parsed, 'wps:wsp', shapes)
   for (const vmlName of ['v:shape', 'v:rect', 'v:roundrect']) {
@@ -1057,7 +1202,13 @@ function extractTextboxes(xml: string, ctx: BuildContext): TextboxDisplay[] {
   for (const shape of shapes) {
     const contents: XNode[] = []
     collectNodes(childrenOf(shape), 'w:txbxContent', contents)
-    if (contents.length === 0) continue
+    if (contents.length === 0) {
+      if (hasLineShapes) {
+        const lineBox = lineBoxOf(shape)
+        if (lineBox) out.push(lineBox)
+      }
+      continue
+    }
     const box: TextboxDisplay = { paras: [] }
     const shapeAttrs = attrsOf(shape)
     if (nameOf(shape) !== 'wps:wsp') {
@@ -1331,7 +1482,7 @@ function extractRuns(
           if (xe) pushRun({ text: '', xeTerm: xe[1] ?? xe[2] }, rev)
           else if (ref) {
             const name = ref[1] ?? ref[2]
-            pushRun({ text: fieldCached || name, refField: name }, rev)
+            pushRun({ text: fieldCached || name, refField: name, refInstr: fieldInstr }, rev)
           } else if (SIMPLE_INLINE_FIELD_RE.test(fieldInstr)) {
             pushRun({ text: fieldCached || ' ', instrField: fieldInstr.trim() }, rev)
           }
@@ -1443,6 +1594,15 @@ function rubyPartText(rubyNode: XNode, part: 'w:rubyBase' | 'w:rt'): string {
   return text
 }
 
+/** OOXML on/off toggle, three-state: absent → undefined, explicit off → false */
+function onOffOf(parent: XNode, name: string): boolean | undefined {
+  const child = findChild(parent, name)
+  if (!child) return undefined
+  const val = attrsOf(child)['w:val']
+  if (val === undefined) return true
+  return !['0', 'false', 'none', 'off'].includes(val.toLowerCase())
+}
+
 function buildRun(rNode: XNode, link?: Run['link'], theme?: ThemeColors | null): Run | null {
   let text = ''
   for (const child of childrenOf(rNode)) {
@@ -1470,10 +1630,14 @@ function buildRun(rNode: XNode, link?: Run['link'], theme?: ThemeColors | null):
     run.rawRPr = serializeXNode(rPr)
     const rStyle = attrsOf(findChild(rPr, 'w:rStyle') ?? {})['w:val']
     if (rStyle && rStyle !== 'Hyperlink') run.styleId = rStyle
-    if (boolProp(rPr, 'w:b')) run.bold = true
-    if (boolProp(rPr, 'w:i')) run.italic = true
+    const bold = onOffOf(rPr, 'w:b')
+    if (bold !== undefined) run.bold = bold
+    const italic = onOffOf(rPr, 'w:i')
+    if (italic !== undefined) run.italic = italic
     if (underlineProp(rPr)) run.underline = true
-    if (boolProp(rPr, 'w:strike')) run.strike = true
+    else if (attrsOf(findChild(rPr, 'w:u') ?? {})['w:val'] === 'none') run.underline = false
+    const strike = onOffOf(rPr, 'w:strike')
+    if (strike !== undefined) run.strike = strike
     const color = colorFrom(rPr, theme)
     if (color) run.color = color
     const sz = attrsOf(findChild(rPr, 'w:sz') ?? {})['w:val']
@@ -1481,6 +1645,8 @@ function buildRun(rNode: XNode, link?: Run['link'], theme?: ThemeColors | null):
     const fonts = attrsOf(findChild(rPr, 'w:rFonts') ?? {})
     const font = fonts['w:eastAsia'] ?? fonts['w:ascii'] ?? fonts['w:hAnsi']
     if (font) run.font = font
+    const fontAscii = fonts['w:ascii'] ?? fonts['w:hAnsi']
+    if (fontAscii) run.fontAscii = fontAscii
     const spc = parseInt(attrsOf(findChild(rPr, 'w:spacing') ?? {})['w:val'] ?? '', 10)
     if (spc) run.charSpacingTwips = spc
     const wScale = parseInt(attrsOf(findChild(rPr, 'w:w') ?? {})['w:val'] ?? '', 10)
@@ -1508,6 +1674,8 @@ function buildRun(rNode: XNode, link?: Run['link'], theme?: ThemeColors | null):
         const ofonts = attrsOf(findChild(oldRPr, 'w:rFonts') ?? {})
         const of = ofonts['w:eastAsia'] ?? ofonts['w:ascii'] ?? ofonts['w:hAnsi']
         if (of) old.font = of
+        const ofa = ofonts['w:ascii'] ?? ofonts['w:hAnsi']
+        if (ofa) old.fontAscii = ofa
         const ospc = parseInt(attrsOf(findChild(oldRPr, 'w:spacing') ?? {})['w:val'] ?? '', 10)
         if (ospc) old.charSpacingTwips = ospc
         const owScale = parseInt(attrsOf(findChild(oldRPr, 'w:w') ?? {})['w:val'] ?? '', 10)
@@ -1534,6 +1702,7 @@ function buildRun(rNode: XNode, link?: Run['link'], theme?: ThemeColors | null):
     if (decoded !== null) {
       run.text = decoded
       delete run.font
+      delete run.fontAscii
       if (run.rawRPr) run.rawRPr = run.rawRPr.replace(/<w:rFonts[^>]*\/>/, '')
     }
   }
@@ -1567,6 +1736,7 @@ function sameStyle(a: Run, b: Run): boolean {
     a.color === b.color &&
     a.sizeHalfPoints === b.sizeHalfPoints &&
     a.font === b.font &&
+    a.fontAscii === b.fontAscii &&
     a.highlight === b.highlight &&
     a.vertAlign === b.vertAlign &&
     (a.link?.href ?? '') === (b.link?.href ?? '') &&
@@ -1907,14 +2077,11 @@ function extractCell(tc: XNode, ctx: BuildContext): TableCell {
     const format = extractParaFormat(pPr ?? {})
     const numPr = pPr ? findChild(pPr, 'w:numPr') : undefined
     const numId = numPr ? attrsOf(findChild(numPr, 'w:numId') ?? {})['w:val'] : undefined
+    const cellIlvl = numPr
+      ? parseInt(attrsOf(findChild(numPr, 'w:ilvl') ?? {})['w:val'] ?? '0', 10) || 0
+      : 0
     const list =
-      numPr && numId
-        ? {
-            kind: ctx.numFormats.get(numId) ?? ('bullet' as const),
-            numId,
-            ilvl: parseInt(attrsOf(findChild(numPr, 'w:ilvl') ?? {})['w:val'] ?? '0', 10) || 0,
-          }
-        : undefined
+      numPr && numId ? { kind: listKindOf(ctx, numId, cellIlvl), numId, ilvl: cellIlvl } : undefined
     richParas.push({ ...format, ...(list ? { list } : {}), runs: extractRuns(p, ctx) })
     if (!cell.align) {
       const jc = attrsOf(findChild(findChild(p, 'w:pPr') ?? {}, 'w:jc') ?? {})['w:val']
@@ -2012,16 +2179,35 @@ function hfContentFromXml(
   theme?: ThemeColors | null,
 ): { text: string; hasPageNumber: boolean; watermark: string | null; paras: HfParagraph[] } {
   const hasPageNumber = /<w:instrText[^>]*>[^<]*\bPAGE\b/.test(xml)
-  // drop cached field results (e.g. the stale page number between separate/end),
-  // then mark the PAGE field position with '#' so "- PAGE -" reads "- # -";
-  // NUMPAGES gets the private-use marker (renderer substitutes the total)
-  const cleaned = xml
-    .replace(/<w:fldChar w:fldCharType="separate"\/>[\s\S]*?<w:fldChar w:fldCharType="end"\/>/g, '')
-    .replace(
-      /<w:instrText[^>]*>[^<]*\bNUMPAGES\b[^<]*<\/w:instrText>/g,
-      `<w:t>${TOTAL_PAGES_MARK}</w:t>`,
-    )
-    .replace(/<w:instrText[^>]*>[^<]*\bPAGE\b[^<]*<\/w:instrText>/g, '<w:t>#</w:t>')
+  // Rewrite each field span (begin..end) for display. PAGE becomes the '#'
+  // marker and NUMPAGES the private-use marker (the renderer substitutes real
+  // numbers), dropping their stale cached results; other fields (DATE, STYLEREF,
+  // ...) keep their cached result runs (Word refreshes them on open). fldChar
+  // attribute matching is tolerant (Pages writes w:fldLock="0" etc.).
+  const cleaned = xml.replace(
+    /<w:fldChar[^>]*w:fldCharType="begin"[^>]*\/>[\s\S]*?<w:fldChar[^>]*w:fldCharType="end"[^>]*\/>/g,
+    (span) => {
+      const instr = (span.match(/<w:instrText[^>]*>[\s\S]*?<\/w:instrText>/g) ?? [])
+        .map((m) => m.replace(/<[^>]+>/g, ''))
+        .join('')
+      const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(span)?.[0] ?? ''
+      // the span starts inside the begin run and ends inside the end run, so
+      // the replacement closes/reopens the enclosing w:r to stay balanced
+      // (the leftover edge runs end up empty and are dropped later)
+      const emit = (inner: string) => `</w:r>${inner}<w:r>`
+      if (/\bNUMPAGES\b/.test(instr)) {
+        return emit(`<w:r>${rPr}<w:t>${TOTAL_PAGES_MARK}</w:t></w:r>`)
+      }
+      if (/\bPAGE\b/.test(instr)) return emit(`<w:r>${rPr}<w:t>#</w:t></w:r>`)
+      const cached = /<w:fldChar[^>]*w:fldCharType="separate"[^>]*\/>([\s\S]*)$/.exec(span)?.[1]
+      // complete result runs between separate and end (partial run fragments at the edges drop out)
+      return emit(
+        (cached?.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) ?? [])
+          .filter((run) => run.includes('<w:t'))
+          .join(''),
+      )
+    },
+  )
   return {
     text: plainText(cleaned),
     hasPageNumber,
@@ -2213,7 +2399,8 @@ function decodeEntities(text: string): string {
  */
 function fieldDisplayOf(xml: string): FieldDisplay | undefined {
   const styleId = /<w:pStyle w:val="([^"]+)"/.exec(xml)?.[1] ?? ''
-  const tocLevel = /^TOC([1-9])$/i.exec(styleId)
+  // "TOC1" (Word) or "TOC 1" (Pages export)
+  const tocLevel = /^TOC ?([1-9])$/i.exec(styleId)
   if (tocLevel) {
     // TOC entry: title <tab with dot leader> page number
     let left = ''
@@ -2243,6 +2430,41 @@ function fieldDisplayOf(xml: string): FieldDisplay | undefined {
     return { kind: 'text', left: visible }
   }
   return undefined
+}
+
+/**
+ * TOC entries carry their outline number ("1.", "1.1.") as w:numPr numbering
+ * (Pages exports one numId per entry with startOverride restarts). The field
+ * result is a display-only cache, so the marker is computed once at parse time
+ * and stored on the tocLine FieldDisplay. Counters run document-wide in block
+ * order, shared with editable list items (same abstractNum semantics).
+ */
+function applyTocEntryNumbers(blocks: Block[], numbering: Map<string, NumberingDef>): void {
+  if (numbering.size === 0) return
+  const items: ListItemRef[] = []
+  const tocAt = new Map<number, FieldDisplay>()
+  for (const block of blocks) {
+    if (block.list?.numId) {
+      items.push({ numId: block.list.numId, ilvl: block.list.ilvl })
+      continue
+    }
+    const fd = block.fieldDisplay
+    if (block.type !== 'passthrough' || fd?.kind !== 'tocLine' || !block.originalXml) continue
+    const numPr = /<w:numPr>[\s\S]*?<\/w:numPr>/.exec(block.originalXml)?.[0]
+    if (!numPr) continue
+    const numId = /<w:numId w:val="([^"]+)"/.exec(numPr)?.[1]
+    if (!numId) continue
+    const ilvl = parseInt(/<w:ilvl w:val="(\d+)"/.exec(numPr)?.[1] ?? '0', 10)
+    tocAt.set(items.length, fd)
+    items.push({ numId, ilvl })
+  }
+  if (tocAt.size === 0) return
+  const markers = computeListMarkers(items, numbering)
+  for (const [i, fd] of tocAt) {
+    const marker = markers[i]
+    // bullets make no sense in front of a TOC entry; only ordered markers show
+    if (marker && !/^[•◦▪➢❖✓]$/.test(marker)) fd.num = marker
+  }
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -2445,7 +2667,14 @@ async function extractChart(xml: string, ctx: BuildContext): Promise<ChartDispla
   if (!file) return null
   const partXml = await file.async('string')
   const display = parseChartPartXml(partXml, path)
-  if (display) ctx.chartParts[path] = partXml
+  if (display) {
+    ctx.chartParts[path] = partXml
+    const extent = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(xml)
+    const cx = extent ? parseInt(extent[1]!, 10) : NaN
+    const cy = extent ? parseInt(extent[2]!, 10) : NaN
+    if (Number.isFinite(cx) && cx > 0) display.widthPx = Math.round(cx / EMU_PER_PX)
+    if (Number.isFinite(cy) && cy > 0) display.heightPx = Math.round(cy / EMU_PER_PX)
+  }
   return display
 }
 
@@ -2456,7 +2685,13 @@ async function parseStyles(
   const styles = new Map<string, StyleInfo>()
   const file = zip.file('word/styles.xml')
   if (!file) return { styles }
-  const parsed = xmlParser.parse(await file.async('string')) as XNode[]
+  let parsed: XNode[]
+  try {
+    parsed = xmlParser.parse(await file.async('string')) as XNode[]
+  } catch (err) {
+    console.warn('styles.xml unparseable, styles degraded to empty:', err)
+    return { styles }
+  }
   const root = parsed.find((n) => nameOf(n) === 'w:styles')
   if (!root) return { styles }
 
@@ -2504,6 +2739,8 @@ async function parseStyles(
 
   const basedOnIds = new Map<string, string>()
   const linkedIds = new Map<string, string>()
+  // styles with an explicit w:outlineLvl 9 (body text, e.g. TOCHeading basedOn Heading1)
+  const outlineOffIds = new Set<string>()
   for (const styleNode of findChildren(root, 'w:style')) {
     const attrs = attrsOf(styleNode)
     const type = attrs['w:type']
@@ -2521,6 +2758,7 @@ async function parseStyles(
         if (outline !== undefined) {
           const lvl = parseInt(outline, 10)
           if (lvl >= 0 && lvl <= 8) headingLevel = lvl + 1
+          else outlineOffIds.add(styleId)
         }
       }
     }
@@ -2562,6 +2800,14 @@ async function parseStyles(
     }
     if (parent?.tableDisplay) {
       info.tableDisplay = mergeTableDisplay(parent.tableDisplay, info.tableDisplay)
+    }
+    if (
+      info.type === 'paragraph' &&
+      info.headingLevel === undefined &&
+      !outlineOffIds.has(styleId) &&
+      parent?.headingLevel
+    ) {
+      info.headingLevel = parent.headingLevel
     }
     return info
   }
@@ -2665,11 +2911,14 @@ function styleDisplayOf(styleNode: XNode, theme?: ThemeColors | null): StyleDisp
     if (sz) display.sizeHalfPoints = parseInt(sz, 10) || undefined
     const color = colorFrom(rPr, theme)
     if (color) display.color = color
-    if (boolProp(rPr, 'w:b')) display.bold = true
-    if (boolProp(rPr, 'w:i')) display.italic = true
+    const bold = onOffOf(rPr, 'w:b')
+    if (bold !== undefined) display.bold = bold
+    const italic = onOffOf(rPr, 'w:i')
+    if (italic !== undefined) display.italic = italic
     const u = attrsOf(findChild(rPr, 'w:u') ?? {})['w:val']
-    if (u && u !== 'none') display.underline = true
-    if (boolProp(rPr, 'w:strike')) display.strike = true
+    if (u) display.underline = u !== 'none'
+    const strike = onOffOf(rPr, 'w:strike')
+    if (strike !== undefined) display.strike = strike
     const fonts = attrsOf(findChild(rPr, 'w:rFonts') ?? {})
     const font = fonts['w:eastAsia'] ?? fonts['w:ascii'] ?? fonts['w:hAnsi']
     if (font) display.font = font

@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import type {
+  AccountLoginEvent,
   AccountStatus,
+  CloudProjectsSnapshot,
   HomeApi,
   RecentEntry,
   RecentPage,
@@ -111,6 +113,18 @@ const homeApi: HomeApi = {
     if (!isUiLanguage(lang)) throw new Error('Invalid language.')
     await ipcRenderer.invoke(HOME_CHANNELS.setLanguage, lang)
   },
+  async getUpdateChannel() {
+    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getUpdateChannel)
+    return result === 'beta' ? 'beta' : 'stable'
+  },
+  async setUpdateChannel(channel) {
+    // validated inline: a runtime import from ../shared/update-api would be
+    // shared with the update.ts preload entry and get split into a chunk,
+    // which sandboxed preload scripts cannot load (window.aiOffice would
+    // silently disappear). Preload entries must stay single-file bundles.
+    if (channel !== 'stable' && channel !== 'beta') throw new Error('Invalid update channel.')
+    await ipcRenderer.invoke(HOME_CHANNELS.setUpdateChannel, channel)
+  },
   async accountStatus() {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.accountStatus)
     return (result ?? { loggedIn: false }) as AccountStatus
@@ -118,6 +132,14 @@ const homeApi: HomeApi = {
   async accountLogin() {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.accountLogin)
     return result === true
+  },
+  onAccountLogin(handler) {
+    const listener = (_event: IpcRendererEvent, ev: AccountLoginEvent) => handler(ev)
+    ipcRenderer.on(HOME_CHANNELS.accountLoginEvent, listener)
+    return () => ipcRenderer.removeListener(HOME_CHANNELS.accountLoginEvent, listener)
+  },
+  async openLoginUrl() {
+    await ipcRenderer.invoke(HOME_CHANNELS.accountLoginOpenUrl)
   },
   async accountLogout() {
     await ipcRenderer.invoke(HOME_CHANNELS.accountLogout)
@@ -137,6 +159,34 @@ const homeApi: HomeApi = {
     await ipcRenderer.invoke(HOME_CHANNELS.openGenTeam)
   },
   hermesStatus: () => ipcRenderer.invoke(HOME_CHANNELS.hermesStatus),
+  async cloudProjectsCached() {
+    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.cloudProjectsCached)
+    return asCloudProjectsSnapshot(result)
+  },
+  async cloudProjectsSync() {
+    // failures (network / CLI) resolve to null so the renderer keeps whatever it has
+    try {
+      const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.cloudProjects)
+      return asCloudProjectsSnapshot(result)
+    } catch {
+      return null
+    }
+  },
+  async openCloudProject(projectUrl) {
+    if (typeof projectUrl !== 'string' || !projectUrl) throw new Error('Invalid project URL.')
+    await ipcRenderer.invoke(HOME_CHANNELS.openCloudProject, projectUrl)
+  },
+}
+
+function asCloudProjectsSnapshot(result: unknown): CloudProjectsSnapshot | null {
+  if (
+    result &&
+    typeof result === 'object' &&
+    Array.isArray((result as CloudProjectsSnapshot).projects)
+  ) {
+    return result as CloudProjectsSnapshot
+  }
+  return null
 }
 
 contextBridge.exposeInMainWorld('aiOffice', homeApi)

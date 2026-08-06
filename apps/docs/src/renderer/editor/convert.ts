@@ -9,7 +9,9 @@ import {
   patchMathTokens,
   patchTableCellTexts,
   type CellTextsPatch,
-  patchTextboxHeights,
+  patchDrawingExtent,
+  patchTextboxSizes,
+  type TextboxSizePatch,
   patchTextboxParas,
   generateTableModelXml,
   type Block,
@@ -34,6 +36,7 @@ import {
 } from '@hermesoffice/docx-engine'
 import { t } from '../i18n/locale'
 import { inlineMathML } from './equation'
+import { isStraightLineKind } from './shape-svg'
 
 /** minimal ProseMirror JSON shapes */
 export interface PmMark {
@@ -607,6 +610,7 @@ function runMarks(run: Run): PmMark[] {
     run.color ||
     run.sizeHalfPoints ||
     run.font ||
+    run.fontAscii ||
     run.charSpacingTwips ||
     run.charScalePct ||
     run.highlight ||
@@ -621,6 +625,7 @@ function runMarks(run: Run): PmMark[] {
         color: run.color ?? null,
         sizeHalfPoints: run.sizeHalfPoints ?? null,
         font: run.font ?? null,
+        fontAscii: run.fontAscii ?? null,
         charSpacingTwips: run.charSpacingTwips ?? null,
         charScaleEm: run.charScalePct ? charScaleEm(run.text, run.charScalePct) : null,
         highlight: run.highlight ?? null,
@@ -788,7 +793,7 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
         const imagePatch = imagePatchOf(node, original)
         const tableTexts = tableTextsPatch(node, original)
         const textboxTexts = textboxParasPatch(node, original)
-        const textboxHeights = textboxHeightsPatch(node, original)
+        const textboxSizes = textboxSizesPatch(node, original)
         const textboxOffsetX =
           node.attrs?.imageOffsetXEmu != null ? Number(node.attrs.imageOffsetXEmu) : undefined
         const textboxOffsetY =
@@ -807,6 +812,15 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
           changedCount++
           chartPatches.push(chartPatch)
         }
+        // chart resize rewrites the body drawing's extent
+        const chartDisplay = node.attrs?.chartDisplay as ChartDisplay | null
+        const chartSize =
+          chartDisplay?.widthPx &&
+          chartDisplay.heightPx &&
+          (chartDisplay.widthPx !== original.chartDisplay?.widthPx ||
+            chartDisplay.heightPx !== original.chartDisplay?.heightPx)
+            ? { w: chartDisplay.widthPx, h: chartDisplay.heightPx }
+            : null
         if (imagePatch && original.originalXml) {
           changedCount++
           let xml = patchImageParagraphXml(original.originalXml, imagePatch)
@@ -828,13 +842,13 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
           changedCount++
           pushBlock({ kind: 'xml', xml: patchTableCellTexts(original.originalXml, tableTexts) })
         } else if (
-          (textboxTexts || textboxHeights || textboxPositionChanged) &&
+          (textboxTexts || textboxSizes || textboxPositionChanged) &&
           original.originalXml
         ) {
           changedCount++
           let xml = original.originalXml
           if (textboxTexts) xml = patchTextboxParas(xml, textboxTexts)
-          if (textboxHeights) xml = patchTextboxHeights(xml, textboxHeights)
+          if (textboxSizes) xml = patchTextboxSizes(xml, textboxSizes)
           if (textboxPositionChanged) {
             const wrap =
               (node.attrs?.imageWrap as ImageWrap | null) ?? original.imageWrap ?? 'square-left'
@@ -847,8 +861,27 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
         } else if (formulaTokens && original.originalXml) {
           changedCount++
           pushBlock({ kind: 'xml', xml: patchMathTokens(original.originalXml, formulaTokens) })
+        } else if (chartSize && original.originalXml) {
+          changedCount++
+          pushBlock({
+            kind: 'xml',
+            xml: patchDrawingExtent(original.originalXml, chartSize.w, chartSize.h),
+          })
         } else {
           pushBlock({ kind: 'original', docxIndex: idx })
+        }
+      } else if (idx !== null && idx !== undefined && originalByIndex.has(idx)) {
+        // pasted copy: the anchor is consumed by the first occurrence, so clone from the block's own data
+        const original = originalByIndex.get(idx)!
+        const image = imageFromProtectedAttrs(node)
+        if (image) {
+          changedCount++
+          pushBlock({ kind: 'image', image })
+        } else if (original.originalXml) {
+          changedCount++
+          pushBlock({ kind: 'xml', xml: stripAnchorMarkers(original.originalXml) })
+        } else {
+          console.warn('dropping unclonable copy of protected block', node.attrs?.label)
         }
       } else if (node.attrs?.genXml) {
         // editor-created table or other self-contained fragment
@@ -874,6 +907,17 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
               box.paras.map((p) => ({ runs: mergeRuns(p.runs), align: p.align ?? null })),
             ),
           )
+        }
+        // persist resize/autogrow of newly-inserted single-box shapes/lines;
+        // horizontal lines keep their zero-height extent (display box is a grab band)
+        const genBox = genTextboxes?.length === 1 ? genTextboxes[0] : null
+        if (genBox && (genBox.widthPx || genBox.heightPx)) {
+          xml = patchTextboxSizes(xml, [
+            {
+              wPx: genBox.widthPx ?? null,
+              hPx: isStraightLineKind(genBox.prst) ? null : (genBox.heightPx ?? null),
+            },
+          ])
         }
         // apply wrap changes for floating textboxes/shapes
         const genWrap = node.attrs?.imageWrap as ImageWrap | null
@@ -912,7 +956,13 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
             values: s.values,
           }))
         }
-        pushBlock({ kind: 'chart', chart: spec })
+        pushBlock({
+          kind: 'chart',
+          chart: spec,
+          ...(display?.widthPx && display.heightPx
+            ? { extentPx: { w: display.widthPx, h: display.heightPx } }
+            : {}),
+        })
       }
       // protected node without an anchor or generated payload cannot be regenerated; drop it
       continue
@@ -940,9 +990,13 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
         mapAnchor(idx!)
         applyRawPPr(generated, original)
       } else if (original) {
-        // A split twin inherits the source node's attrs, including pPrChange,
-        // but the revision belongs only to the original anchored paragraph.
+        // A split twin inherits the source node's attrs, but pPrChange and
+        // bookmark/comment anchors belong only to the anchored original.
         delete generated.pPrChange
+        delete generated.bookmarks
+        delete generated.hiddenBookmarks
+        delete generated.commentStarts
+        delete generated.commentEnds
         // A grouped shell (partial open/close of a multi-block sdt) must be
         // emitted exactly once, by the anchor.
         if (generated.sdtShell?.group !== undefined) delete generated.sdtShell
@@ -989,6 +1043,31 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
     deletedCount,
     totalOriginal: originalByIndex.size,
   }
+}
+
+/** rebuild a pasted image copy from its preview bytes; null when not materializable */
+function imageFromProtectedAttrs(node: PmNode): NewImage | null {
+  if (node.attrs?.blockType !== 'image') return null
+  const m = /^data:(image\/(?:png|jpeg|gif));base64,(.+)$/.exec(
+    String(node.attrs?.imageDataUrl ?? ''),
+  )
+  const widthPx = Number(node.attrs?.imageWidthPx)
+  const heightPx = Number(node.attrs?.imageHeightPx)
+  if (!m || !widthPx || !heightPx) return null
+  const image: NewImage = { base64: m[2], mime: m[1] as NewImage['mime'], widthPx, heightPx }
+  const align = node.attrs?.imageAlign as NewImage['align'] | null
+  if (align) image.align = align
+  const wrap = node.attrs?.imageWrap as ImageWrap | null
+  if (wrap) image.wrap = wrap
+  return image
+}
+
+/** cloned XML must not repeat the anchor's bookmark/comment ids */
+function stripAnchorMarkers(xml: string): string {
+  return xml.replace(
+    /<w:(?:bookmarkStart|bookmarkEnd|commentRangeStart|commentRangeEnd|commentReference)\b[^>]*\/>/g,
+    '',
+  )
 }
 
 /** chart data changes vs the parsed model; null when untouched or unpatchable */
@@ -1199,18 +1278,21 @@ function textboxParasPatch(
   return changed ? boxes : null
 }
 
-function textboxHeightsPatch(node: PmNode, original: Block): (number | null)[] | null {
+function textboxSizesPatch(node: PmNode, original: Block): (TextboxSizePatch | null)[] | null {
   const current = node.attrs?.textboxes as TextboxDisplay[] | null
   const initial = original.textboxes
   if (!current || !initial || current.length !== initial.length) return null
   let changed = false
-  const heights = current.map((box, index) => {
-    const originalHeight = initial[index].heightPx
-    if (!originalHeight || !box.heightPx || box.heightPx === originalHeight) return null
+  const sizes = current.map((box, index) => {
+    // a resize on an autofit box (no initial heightPx) pins its height:
+    // patchTextboxSizes drops spAutoFit so Word honors the fixed extent
+    const wPx = box.widthPx && box.widthPx !== initial[index].widthPx ? box.widthPx : null
+    const hPx = box.heightPx && box.heightPx !== initial[index].heightPx ? box.heightPx : null
+    if (wPx == null && hPx == null) return null
     changed = true
-    return box.heightPx
+    return { wPx, hPx }
   })
-  return changed ? heights : null
+  return changed ? sizes : null
 }
 
 function fieldTextPatch(node: PmNode, original: Block): FieldTextPatch | null {
@@ -1394,7 +1476,8 @@ export function inlineToRuns(content: PmNode[]): Run[] {
     if (node.type === 'hardBreak') {
       const ch = node.attrs?.pageBreak ? '\f' : '\n'
       const prev = runs[runs.length - 1]
-      const prevAtomic = prev && (prev.noteRef || prev.xeTerm !== undefined || prev.math || prev.ruby)
+      const prevAtomic =
+        prev && (prev.noteRef || prev.xeTerm !== undefined || prev.math || prev.ruby)
       if (prev && !prevAtomic) prev.text += ch
       else runs.push({ text: ch })
       continue
@@ -1460,6 +1543,7 @@ export function inlineToRuns(content: PmNode[]): Run[] {
         if (mark.attrs?.color) run.color = String(mark.attrs.color)
         if (mark.attrs?.sizeHalfPoints) run.sizeHalfPoints = Number(mark.attrs.sizeHalfPoints)
         if (mark.attrs?.font) run.font = String(mark.attrs.font)
+        if (mark.attrs?.fontAscii) run.fontAscii = String(mark.attrs.fontAscii)
         if (mark.attrs?.charSpacingTwips) run.charSpacingTwips = Number(mark.attrs.charSpacingTwips)
         if (mark.attrs?.highlight) run.highlight = String(mark.attrs.highlight)
         if (mark.attrs?.vertAlign === 'superscript' || mark.attrs?.vertAlign === 'subscript') {
@@ -1515,6 +1599,7 @@ function runStyleKey(run: Run): string {
     run.color ?? null,
     run.sizeHalfPoints ?? null,
     run.font ?? null,
+    run.fontAscii ?? null,
     run.highlight ?? null,
     run.vertAlign ?? null,
     run.link?.href ?? null,
@@ -1556,6 +1641,7 @@ function normalizedRuns(runs: Run[]): unknown[] {
     r.color ?? null,
     r.sizeHalfPoints ?? null,
     r.font ?? null,
+    r.fontAscii ?? null,
     r.highlight ?? null,
     r.vertAlign ?? null,
     r.link?.href ?? null,

@@ -1,8 +1,3 @@
-/**
- * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
- * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
- * atribuição original preservada em NOTICE.
- */
 import { spawn } from 'node:child_process'
 import {
   copyFileSync,
@@ -32,11 +27,38 @@ import menuXlsxIcon1x from './assets/menu-xlsx.png?asset'
 import menuXlsxIcon2x from './assets/menu-xlsx@2x.png?asset'
 import menuPptxIcon1x from './assets/menu-pptx.png?asset'
 import menuPptxIcon2x from './assets/menu-pptx@2x.png?asset'
-import { hermesHealthUrl } from '@hermesoffice/ai-provider'
+import menuPdfIcon1x from './assets/menu-pdf.png?asset'
+import menuPdfIcon2x from './assets/menu-pdf@2x.png?asset'
+import menuHomeIcon1x from './assets/menu-home.png?asset'
+import menuHomeIcon2x from './assets/menu-home@2x.png?asset'
 import { createI18n, isLang, normalizeLang, setUiLang, type Lang } from '@hermesoffice/i18n'
-import { installNavigationGuard } from '@hermesoffice/electron-utils'
+import { hermesHealthUrl } from '@hermesoffice/ai-provider'
+import {
+  appMenuLabels,
+  contextMenuLabels,
+  editMenuTemplate,
+  installContextMenu,
+  installNavigationGuard,
+  showOpenDialogWithMemory,
+  showSaveDialogWithMemory,
+  windowMenuTemplate,
+} from '@hermesoffice/electron-utils'
 import { readAppSettings, writeAppSetting } from './app-settings'
+import {
+  clearCloudProjectsStore,
+  cloudProjectExternalUrl,
+  readCloudProjectsStore,
+  syncCloudProjects,
+} from './cloud-projects'
 import { ProjectStore } from '@hermesoffice/project-store'
+import {
+  ensureGenofficeLogin,
+  gskConvertPdfToDocx,
+  gskLoginInfo,
+  hasGskAuth,
+  resolveGskEntry,
+  setGskProxyUrl,
+} from '@hermesoffice/ai-search'
 
 import {
   buildDocsMenu,
@@ -93,16 +115,23 @@ import {
   setSlidesShellWindow,
   slidesFileRenamed,
 } from '../../../slides/src/main/slides-main'
-import { configurePdfRuntime, flushPdfSave, requestPdfClose } from '../../../pdf/src/main/pdf-main'
+import {
+  configurePdfRuntime,
+  flushPdfSave,
+  pdfIsDirty,
+  requestPdfClose,
+  requestPdfSaveAs,
+  setPdfSaveAsInFlight,
+} from '../../../pdf/src/main/pdf-main'
 import type { RecentEntry, RecentPage, RenameResult } from '../shared/home-api'
 import { HOME_CHANNELS } from '../shared/home-api'
 import type { TabKind } from '../shared/tabs-api'
 import { TABS_CHANNELS } from '../shared/tabs-api'
-import { ensureHermesGateway } from './hermes-launcher'
+import { showErrorDialog } from './error-dialog'
 import { normalizeRecentQuery, pageRecentPaths, statExistingPaths } from './recent-files'
 import { TabManager } from './tab-manager'
-import { initAutoUpdater } from './updater'
-import { initMainUpdater } from './main-updater'
+import { applyUpdateChannel, initAutoUpdater } from './updater'
+import { isUpdateChannel, type UpdateChannel } from '../shared/update-api'
 
 /**
  * HermesOffice unified shell: ONE Electron app, ONE BrowserWindow, hosting the
@@ -203,9 +232,16 @@ function persistLang(lang: Lang): void {
   writeAppSetting(APP_SETTINGS_PATH(), 'language', lang)
 }
 
+function currentUpdateChannel(): UpdateChannel {
+  const saved = readAppSettings(APP_SETTINGS_PATH()).updateChannel
+  return isUpdateChannel(saved) ? saved : 'stable'
+}
+
 // ---- first-run onboarding ----
-// Fork: o link de comunidade aponta para o repo do HermesOffice.
-const GENTEAM_URL = 'https://github.com/criptogus/HermesOffice'
+// The GenTeam community page opened from the onboarding's second slide.
+// Stable short link served by the genspark.ai site; it 302s to the tokened
+// invite link, which stays out of this repo and rotates server-side.
+const GENTEAM_URL = 'https://www.genspark.ai/hermesoffice/join'
 
 const tMain = createI18n({
   zh: {
@@ -236,17 +272,23 @@ const tMain = createI18n({
     errMissing: '文件不存在',
     errExists: '同名文件已存在',
     errRenameFailed: '重命名失败',
+    errNewTabFailed: '新建文档失败',
     errUnsupportedExt: '暂不支持 .{ext} 类型',
     copySuffix: '副本',
     menuHelp: '帮助',
     thirdPartyNotices: '第三方软件声明',
-    hermesGwTitle: 'Hermes 网关',
-    hermesGwBody: 'Hermes 网关未在运行。HermesOffice 的 AI 功能需要本地网关。现在启动它吗？',
-    hermesGwStart: '启动',
-    hermesGwNotNow: '暂不',
-    hermesGwNever: '不再询问',
-    hermesGwAlways: '总是自动启动',
-    hermesGwFailed: '网关启动失败，请在终端中手动运行 hermes gateway start。',
+    menuExportDocx: '导出为 Word…',
+    pdfDocxLoginMsg: '导出为 Word 需要登录 Genspark 账号。',
+    pdfDocxLoginDetail: '点击“登录”将打开浏览器完成授权，完成后请重新点击导出。',
+    pdfDocxBtnLogin: '登录',
+    pdfDocxConfirmMsg: '将此 PDF 上传到 Genspark 云端转换为 Word？',
+    pdfDocxConfirmDetail: '本次转换将消耗 5 credits，文件将上传至云端处理。',
+    pdfDocxConfirmBalance: '当前余额 {balance} credits。',
+    pdfDocxBtnConvert: '继续',
+    btnCancel: '取消',
+    pdfDocxFailedMsg: '导出为 Word 失败',
+    pdfDocxNoCliMsg: '无法登录 Genspark：缺少必需组件（gsk），请重新安装应用。',
+    pdfDocxBusyMsg: '正在转换中，请等待当前导出完成。',
   },
   en: {
     menuFile: 'File',
@@ -276,19 +318,26 @@ const tMain = createI18n({
     errMissing: 'File not found',
     errExists: 'A file with that name already exists',
     errRenameFailed: 'Rename failed',
+    errNewTabFailed: 'Could not create the new document',
     errUnsupportedExt: '.{ext} files are not supported',
     copySuffix: 'copy',
     menuHelp: 'Help',
     thirdPartyNotices: 'Third-Party Notices',
-    hermesGwTitle: 'Hermes gateway',
-    hermesGwBody:
-      "The Hermes gateway is not running. HermesOffice's AI features need the local gateway. Start it now?",
-    hermesGwStart: 'Start',
-    hermesGwNotNow: 'Not now',
-    hermesGwNever: "Don't ask again",
-    hermesGwAlways: 'Always start automatically',
-    hermesGwFailed:
-      'The gateway failed to start; run `hermes gateway start` manually in a terminal.',
+    menuExportDocx: 'Export as Word…',
+    pdfDocxLoginMsg: 'Exporting as Word requires signing in to Genspark.',
+    pdfDocxLoginDetail:
+      'Clicking “Sign In” opens your browser to authorize; once done, click Export again.',
+    pdfDocxBtnLogin: 'Sign In',
+    pdfDocxConfirmMsg: 'Upload this PDF to Genspark cloud and convert it to Word?',
+    pdfDocxConfirmDetail:
+      'The conversion costs 5 credits. The file will be uploaded for cloud processing.',
+    pdfDocxConfirmBalance: 'Current balance: {balance} credits.',
+    pdfDocxBtnConvert: 'Continue',
+    btnCancel: 'Cancel',
+    pdfDocxFailedMsg: 'Export as Word failed',
+    pdfDocxNoCliMsg:
+      'Cannot sign in to Genspark: a required component (gsk) is missing. Please reinstall the app.',
+    pdfDocxBusyMsg: 'A Word export is already in progress. Please wait for it to finish.',
   },
   ja: {
     menuFile: 'ファイル',
@@ -318,19 +367,26 @@ const tMain = createI18n({
     errMissing: 'ファイルが見つかりません',
     errExists: '同名のファイルが既に存在します',
     errRenameFailed: '名前の変更に失敗しました',
+    errNewTabFailed: '新規ドキュメントを作成できませんでした',
     errUnsupportedExt: '.{ext} 形式には対応していません',
     copySuffix: 'コピー',
     menuHelp: 'ヘルプ',
     thirdPartyNotices: 'サードパーティソフトウェアに関する通知',
-    hermesGwTitle: 'Hermes ゲートウェイ',
-    hermesGwBody:
-      'Hermes ゲートウェイが起動していません。HermesOffice の AI 機能にはローカルゲートウェイが必要です。今すぐ起動しますか？',
-    hermesGwStart: '起動',
-    hermesGwNotNow: '後で',
-    hermesGwNever: '今後表示しない',
-    hermesGwAlways: '常に自動で起動',
-    hermesGwFailed:
-      'ゲートウェイの起動に失敗しました。ターミナルで hermes gateway start を実行してください。',
+    menuExportDocx: 'Word として書き出す…',
+    pdfDocxLoginMsg: 'Word への書き出しには Genspark へのログインが必要です。',
+    pdfDocxLoginDetail:
+      '「ログイン」をクリックするとブラウザで認証します。完了後、もう一度書き出しを実行してください。',
+    pdfDocxBtnLogin: 'ログイン',
+    pdfDocxConfirmMsg: 'この PDF を Genspark クラウドにアップロードして Word に変換しますか？',
+    pdfDocxConfirmDetail:
+      '変換には 5 クレジットを消費します。ファイルはクラウドにアップロードされ処理されます。',
+    pdfDocxConfirmBalance: '現在の残高：{balance} クレジット。',
+    pdfDocxBtnConvert: '続行',
+    btnCancel: 'キャンセル',
+    pdfDocxFailedMsg: 'Word への書き出しに失敗しました',
+    pdfDocxNoCliMsg:
+      'Genspark にサインインできません：必要なコンポーネント（gsk）が見つかりません。アプリを再インストールしてください。',
+    pdfDocxBusyMsg: 'Word への書き出しが進行中です。完了までお待ちください。',
   },
   ko: {
     menuFile: '파일',
@@ -360,18 +416,26 @@ const tMain = createI18n({
     errMissing: '파일을 찾을 수 없습니다',
     errExists: '같은 이름의 파일이 이미 있습니다',
     errRenameFailed: '이름 바꾸기에 실패했습니다',
+    errNewTabFailed: '새 문서를 만들지 못했습니다',
     errUnsupportedExt: '.{ext} 형식은 지원되지 않습니다',
     copySuffix: '복사본',
     menuHelp: '도움말',
     thirdPartyNotices: '타사 소프트웨어 고지',
-    hermesGwTitle: 'Hermes 게이트웨이',
-    hermesGwBody:
-      'Hermes 게이트웨이가 실행 중이 아닙니다. HermesOffice의 AI 기능에는 로컬 게이트웨이가 필요합니다. 지금 시작할까요?',
-    hermesGwStart: '시작',
-    hermesGwNotNow: '나중에',
-    hermesGwNever: '다시 묻지 않음',
-    hermesGwAlways: '항상 자동으로 시작',
-    hermesGwFailed: '게이트웨이 시작에 실패했습니다. 터미널에서 hermes gateway start를 실행하세요.',
+    menuExportDocx: 'Word로 내보내기…',
+    pdfDocxLoginMsg: 'Word로 내보내려면 Genspark 로그인이 필요합니다.',
+    pdfDocxLoginDetail:
+      '“로그인”을 클릭하면 브라우저에서 인증합니다. 완료 후 내보내기를 다시 클릭하세요.',
+    pdfDocxBtnLogin: '로그인',
+    pdfDocxConfirmMsg: '이 PDF를 Genspark 클라우드에 업로드하여 Word로 변환할까요?',
+    pdfDocxConfirmDetail:
+      '변환에는 5 크레딧이 소모됩니다. 파일은 클라우드로 업로드되어 처리됩니다.',
+    pdfDocxConfirmBalance: '현재 잔액: {balance} 크레딧.',
+    pdfDocxBtnConvert: '계속',
+    btnCancel: '취소',
+    pdfDocxFailedMsg: 'Word로 내보내기 실패',
+    pdfDocxNoCliMsg:
+      'Genspark에 로그인할 수 없습니다. 필수 구성 요소(gsk)가 없습니다. 앱을 다시 설치해 주세요.',
+    pdfDocxBusyMsg: 'Word 내보내기가 이미 진행 중입니다. 완료될 때까지 기다려 주세요.',
   },
   fr: {
     menuFile: 'Fichier',
@@ -401,19 +465,26 @@ const tMain = createI18n({
     errMissing: 'Fichier introuvable',
     errExists: 'Un fichier du même nom existe déjà',
     errRenameFailed: 'Échec du renommage',
+    errNewTabFailed: 'Impossible de créer le nouveau document',
     errUnsupportedExt: 'les fichiers .{ext} ne sont pas pris en charge',
     copySuffix: 'copie',
     menuHelp: 'Aide',
     thirdPartyNotices: 'Mentions relatives aux logiciels tiers',
-    hermesGwTitle: 'Passerelle Hermes',
-    hermesGwBody:
-      "La passerelle Hermes n'est pas en cours d'exécution. Les fonctions IA de HermesOffice en ont besoin. La démarrer maintenant ?",
-    hermesGwStart: 'Démarrer',
-    hermesGwNotNow: 'Plus tard',
-    hermesGwNever: 'Ne plus demander',
-    hermesGwAlways: 'Toujours démarrer automatiquement',
-    hermesGwFailed:
-      'Échec du démarrage de la passerelle ; exécutez hermes gateway start dans un terminal.',
+    menuExportDocx: 'Exporter en Word…',
+    pdfDocxLoginMsg: "L'export en Word nécessite une connexion à Genspark.",
+    pdfDocxLoginDetail:
+      "Cliquez sur « Se connecter » pour autoriser dans le navigateur, puis relancez l'export.",
+    pdfDocxBtnLogin: 'Se connecter',
+    pdfDocxConfirmMsg: 'Téléverser ce PDF vers le cloud Genspark pour le convertir en Word ?',
+    pdfDocxConfirmDetail:
+      'La conversion coûte 5 crédits. Le fichier sera téléversé pour traitement dans le cloud.',
+    pdfDocxConfirmBalance: 'Solde actuel : {balance} crédits.',
+    pdfDocxBtnConvert: 'Continuer',
+    btnCancel: 'Annuler',
+    pdfDocxFailedMsg: "Échec de l'export en Word",
+    pdfDocxNoCliMsg:
+      "Connexion à Genspark impossible : un composant requis (gsk) est manquant. Veuillez réinstaller l'application.",
+    pdfDocxBusyMsg: "Un export en Word est déjà en cours. Veuillez attendre qu'il se termine.",
   },
   de: {
     menuFile: 'Datei',
@@ -443,19 +514,26 @@ const tMain = createI18n({
     errMissing: 'Datei nicht gefunden',
     errExists: 'Eine Datei mit diesem Namen existiert bereits',
     errRenameFailed: 'Umbenennen fehlgeschlagen',
+    errNewTabFailed: 'Neues Dokument konnte nicht erstellt werden',
     errUnsupportedExt: '.{ext}-Dateien werden nicht unterstützt',
     copySuffix: 'Kopie',
     menuHelp: 'Hilfe',
     thirdPartyNotices: 'Hinweise zu Drittanbietersoftware',
-    hermesGwTitle: 'Hermes-Gateway',
-    hermesGwBody:
-      'Das Hermes-Gateway läuft nicht. Die KI-Funktionen von HermesOffice benötigen das lokale Gateway. Jetzt starten?',
-    hermesGwStart: 'Starten',
-    hermesGwNotNow: 'Nicht jetzt',
-    hermesGwNever: 'Nicht mehr fragen',
-    hermesGwAlways: 'Immer automatisch starten',
-    hermesGwFailed:
-      'Der Gateway-Start ist fehlgeschlagen; führen Sie hermes gateway start im Terminal aus.',
+    menuExportDocx: 'Als Word exportieren…',
+    pdfDocxLoginMsg: 'Für den Word-Export ist eine Anmeldung bei Genspark erforderlich.',
+    pdfDocxLoginDetail:
+      'Klicken Sie auf „Anmelden“, um die Autorisierung im Browser abzuschließen, und starten Sie den Export danach erneut.',
+    pdfDocxBtnLogin: 'Anmelden',
+    pdfDocxConfirmMsg: 'Dieses PDF in die Genspark-Cloud hochladen und in Word konvertieren?',
+    pdfDocxConfirmDetail:
+      'Die Konvertierung kostet 5 Credits. Die Datei wird zur Verarbeitung in die Cloud hochgeladen.',
+    pdfDocxConfirmBalance: 'Aktuelles Guthaben: {balance} Credits.',
+    pdfDocxBtnConvert: 'Fortfahren',
+    btnCancel: 'Abbrechen',
+    pdfDocxFailedMsg: 'Word-Export fehlgeschlagen',
+    pdfDocxNoCliMsg:
+      'Anmeldung bei Genspark nicht möglich: Eine erforderliche Komponente (gsk) fehlt. Bitte installieren Sie die App neu.',
+    pdfDocxBusyMsg: 'Ein Word-Export läuft bereits. Bitte warten Sie, bis er abgeschlossen ist.',
   },
   es: {
     menuFile: 'Archivo',
@@ -485,18 +563,26 @@ const tMain = createI18n({
     errMissing: 'Archivo no encontrado',
     errExists: 'Ya existe un archivo con ese nombre',
     errRenameFailed: 'No se pudo cambiar el nombre',
+    errNewTabFailed: 'No se pudo crear el nuevo documento',
     errUnsupportedExt: 'los archivos .{ext} no son compatibles',
     copySuffix: 'copia',
     menuHelp: 'Ayuda',
     thirdPartyNotices: 'Avisos de software de terceros',
-    hermesGwTitle: 'Puerta de enlace Hermes',
-    hermesGwBody:
-      'La puerta de enlace Hermes no está en ejecución. Las funciones de IA de HermesOffice la necesitan. ¿Iniciarla ahora?',
-    hermesGwStart: 'Iniciar',
-    hermesGwNotNow: 'Ahora no',
-    hermesGwNever: 'No volver a preguntar',
-    hermesGwAlways: 'Iniciar siempre automáticamente',
-    hermesGwFailed: 'No se pudo iniciar; ejecute hermes gateway start en una terminal.',
+    menuExportDocx: 'Exportar como Word…',
+    pdfDocxLoginMsg: 'Para exportar como Word es necesario iniciar sesión en Genspark.',
+    pdfDocxLoginDetail:
+      'Al hacer clic en «Iniciar sesión» se abrirá el navegador para autorizar; después, vuelve a hacer clic en Exportar.',
+    pdfDocxBtnLogin: 'Iniciar sesión',
+    pdfDocxConfirmMsg: '¿Subir este PDF a la nube de Genspark para convertirlo a Word?',
+    pdfDocxConfirmDetail:
+      'La conversión cuesta 5 créditos. El archivo se subirá para procesarse en la nube.',
+    pdfDocxConfirmBalance: 'Saldo actual: {balance} créditos.',
+    pdfDocxBtnConvert: 'Continuar',
+    btnCancel: 'Cancelar',
+    pdfDocxFailedMsg: 'Error al exportar como Word',
+    pdfDocxNoCliMsg:
+      'No se puede iniciar sesión en Genspark: falta un componente necesario (gsk). Reinstale la aplicación.',
+    pdfDocxBusyMsg: 'Ya hay una exportación a Word en curso. Espera a que termine.',
   },
   th: {
     menuFile: 'ไฟล์',
@@ -526,18 +612,25 @@ const tMain = createI18n({
     errMissing: 'ไม่พบไฟล์',
     errExists: 'มีไฟล์ชื่อเดียวกันอยู่แล้ว',
     errRenameFailed: 'เปลี่ยนชื่อไม่สำเร็จ',
+    errNewTabFailed: 'สร้างเอกสารใหม่ไม่สำเร็จ',
     errUnsupportedExt: 'ไม่รองรับไฟล์ .{ext}',
     copySuffix: 'สำเนา',
     menuHelp: 'วิธีใช้',
     thirdPartyNotices: 'ประกาศเกี่ยวกับซอฟต์แวร์ของบุคคลที่สาม',
-    hermesGwTitle: 'เกตเวย์ Hermes',
-    hermesGwBody:
-      'เกตเวย์ Hermes ยังไม่ทำงาน ฟีเจอร์ AI ของ HermesOffice ต้องใช้เกตเวย์ในเครื่อง เริ่มตอนนี้หรือไม่?',
-    hermesGwStart: 'เริ่ม',
-    hermesGwNotNow: 'ไว้ทีหลัง',
-    hermesGwNever: 'ไม่ต้องถามอีก',
-    hermesGwAlways: 'เริ่มอัตโนมัติเสมอ',
-    hermesGwFailed: 'เริ่มเกตเวย์ไม่สำเร็จ โปรดรัน hermes gateway start ในเทอร์มินัล',
+    menuExportDocx: 'ส่งออกเป็น Word…',
+    pdfDocxLoginMsg: 'การส่งออกเป็น Word ต้องเข้าสู่ระบบ Genspark',
+    pdfDocxLoginDetail:
+      'คลิก “เข้าสู่ระบบ” เพื่อเปิดเบราว์เซอร์ยืนยันตัวตน เสร็จแล้วให้คลิกส่งออกอีกครั้ง',
+    pdfDocxBtnLogin: 'เข้าสู่ระบบ',
+    pdfDocxConfirmMsg: 'อัปโหลด PDF นี้ไปยังคลาวด์ Genspark เพื่อแปลงเป็น Word หรือไม่?',
+    pdfDocxConfirmDetail: 'การแปลงใช้ 5 เครดิต ไฟล์จะถูกอัปโหลดเพื่อประมวลผลบนคลาวด์',
+    pdfDocxConfirmBalance: 'ยอดคงเหลือปัจจุบัน: {balance} เครดิต',
+    pdfDocxBtnConvert: 'ดำเนินการต่อ',
+    btnCancel: 'ยกเลิก',
+    pdfDocxFailedMsg: 'ส่งออกเป็น Word ไม่สำเร็จ',
+    pdfDocxNoCliMsg:
+      'ไม่สามารถลงชื่อเข้าใช้ Genspark ได้: ไม่พบคอมโพเนนต์ที่จำเป็น (gsk) โปรดติดตั้งแอปใหม่',
+    pdfDocxBusyMsg: 'กำลังส่งออกเป็น Word อยู่ โปรดรอให้เสร็จสิ้นก่อน',
   },
   id: {
     menuFile: 'File',
@@ -567,18 +660,26 @@ const tMain = createI18n({
     errMissing: 'File tidak ditemukan',
     errExists: 'File dengan nama tersebut sudah ada',
     errRenameFailed: 'Gagal mengganti nama',
+    errNewTabFailed: 'Gagal membuat dokumen baru',
     errUnsupportedExt: 'file .{ext} tidak didukung',
     copySuffix: 'salinan',
     menuHelp: 'Bantuan',
     thirdPartyNotices: 'Pemberitahuan Perangkat Lunak Pihak Ketiga',
-    hermesGwTitle: 'Gateway Hermes',
-    hermesGwBody:
-      'Gateway Hermes tidak berjalan. Fitur AI HermesOffice memerlukan gateway lokal. Mulai sekarang?',
-    hermesGwStart: 'Mulai',
-    hermesGwNotNow: 'Nanti saja',
-    hermesGwNever: 'Jangan tanya lagi',
-    hermesGwAlways: 'Selalu mulai otomatis',
-    hermesGwFailed: 'Gateway gagal dimulai; jalankan hermes gateway start di terminal.',
+    menuExportDocx: 'Ekspor sebagai Word…',
+    pdfDocxLoginMsg: 'Ekspor sebagai Word memerlukan login ke Genspark.',
+    pdfDocxLoginDetail:
+      'Klik “Masuk” untuk membuka browser dan memberi otorisasi; setelah selesai, klik Ekspor lagi.',
+    pdfDocxBtnLogin: 'Masuk',
+    pdfDocxConfirmMsg: 'Unggah PDF ini ke cloud Genspark untuk dikonversi ke Word?',
+    pdfDocxConfirmDetail:
+      'Konversi ini menggunakan 5 kredit. File akan diunggah untuk diproses di cloud.',
+    pdfDocxConfirmBalance: 'Saldo saat ini: {balance} kredit.',
+    pdfDocxBtnConvert: 'Lanjutkan',
+    btnCancel: 'Batal',
+    pdfDocxFailedMsg: 'Gagal mengekspor sebagai Word',
+    pdfDocxNoCliMsg:
+      'Tidak dapat masuk ke Genspark: komponen yang diperlukan (gsk) tidak ditemukan. Silakan instal ulang aplikasi.',
+    pdfDocxBusyMsg: 'Ekspor ke Word sedang berlangsung. Harap tunggu hingga selesai.',
   },
   ru: {
     menuFile: 'Файл',
@@ -608,18 +709,26 @@ const tMain = createI18n({
     errMissing: 'Файл не найден',
     errExists: 'Файл с таким именем уже существует',
     errRenameFailed: 'Не удалось переименовать',
+    errNewTabFailed: 'Не удалось создать новый документ',
     errUnsupportedExt: 'файлы .{ext} не поддерживаются',
     copySuffix: 'копия',
     menuHelp: 'Справка',
     thirdPartyNotices: 'Уведомления о стороннем ПО',
-    hermesGwTitle: 'Шлюз Hermes',
-    hermesGwBody:
-      'Шлюз Hermes не запущен. Функциям ИИ HermesOffice нужен локальный шлюз. Запустить сейчас?',
-    hermesGwStart: 'Запустить',
-    hermesGwNotNow: 'Не сейчас',
-    hermesGwNever: 'Больше не спрашивать',
-    hermesGwAlways: 'Всегда запускать автоматически',
-    hermesGwFailed: 'Не удалось запустить шлюз; выполните hermes gateway start в терминале.',
+    menuExportDocx: 'Экспортировать в Word…',
+    pdfDocxLoginMsg: 'Для экспорта в Word требуется вход в Genspark.',
+    pdfDocxLoginDetail:
+      'Нажмите «Войти», чтобы авторизоваться в браузере, затем снова запустите экспорт.',
+    pdfDocxBtnLogin: 'Войти',
+    pdfDocxConfirmMsg: 'Загрузить этот PDF в облако Genspark и конвертировать в Word?',
+    pdfDocxConfirmDetail:
+      'Конвертация стоит 5 кредитов. Файл будет загружен для обработки в облаке.',
+    pdfDocxConfirmBalance: 'Текущий баланс: {balance} кредитов.',
+    pdfDocxBtnConvert: 'Продолжить',
+    btnCancel: 'Отмена',
+    pdfDocxFailedMsg: 'Не удалось экспортировать в Word',
+    pdfDocxNoCliMsg:
+      'Не удаётся войти в Genspark: отсутствует необходимый компонент (gsk). Переустановите приложение.',
+    pdfDocxBusyMsg: 'Экспорт в Word уже выполняется. Дождитесь его завершения.',
   },
   ar: {
     menuFile: 'ملف',
@@ -649,18 +758,25 @@ const tMain = createI18n({
     errMissing: 'الملف غير موجود',
     errExists: 'يوجد ملف بالاسم نفسه بالفعل',
     errRenameFailed: 'فشلت إعادة التسمية',
+    errNewTabFailed: 'تعذّر إنشاء المستند الجديد',
     errUnsupportedExt: 'ملفات .{ext} غير مدعومة',
     copySuffix: 'نسخة',
     menuHelp: 'تعليمات',
     thirdPartyNotices: 'إشعارات برامج الجهات الخارجية',
-    hermesGwTitle: 'بوابة Hermes',
-    hermesGwBody:
-      'بوابة Hermes غير مشغّلة. تحتاج ميزات الذكاء الاصطناعي في HermesOffice إلى البوابة المحلية. هل تريد تشغيلها الآن؟',
-    hermesGwStart: 'تشغيل',
-    hermesGwNotNow: 'ليس الآن',
-    hermesGwNever: 'عدم السؤال مجددًا',
-    hermesGwAlways: 'التشغيل تلقائيًا دائمًا',
-    hermesGwFailed: 'فشل تشغيل البوابة؛ نفّذ hermes gateway start في الطرفية.',
+    menuExportDocx: 'تصدير كملف Word…',
+    pdfDocxLoginMsg: 'يتطلب التصدير كملف Word تسجيل الدخول إلى Genspark.',
+    pdfDocxLoginDetail:
+      'انقر على «تسجيل الدخول» لفتح المتصفح وإتمام التفويض، ثم انقر على التصدير مرة أخرى.',
+    pdfDocxBtnLogin: 'تسجيل الدخول',
+    pdfDocxConfirmMsg: 'رفع هذا الـ PDF إلى سحابة Genspark وتحويله إلى Word؟',
+    pdfDocxConfirmDetail: 'يكلف التحويل 5 أرصدة. سيتم رفع الملف للمعالجة في السحابة.',
+    pdfDocxConfirmBalance: 'الرصيد الحالي: {balance} من الأرصدة.',
+    pdfDocxBtnConvert: 'متابعة',
+    btnCancel: 'إلغاء',
+    pdfDocxFailedMsg: 'فشل التصدير كملف Word',
+    pdfDocxNoCliMsg:
+      'تعذّر تسجيل الدخول إلى Genspark: المكوّن المطلوب (gsk) مفقود. يُرجى إعادة تثبيت التطبيق.',
+    pdfDocxBusyMsg: 'يجري حاليًا تصدير إلى Word. يُرجى الانتظار حتى يكتمل.',
   },
   pt: {
     menuFile: 'Arquivo',
@@ -690,18 +806,26 @@ const tMain = createI18n({
     errMissing: 'Arquivo não encontrado',
     errExists: 'Já existe um arquivo com esse nome',
     errRenameFailed: 'Falha ao renomear',
+    errNewTabFailed: 'Falha ao criar o novo documento',
     errUnsupportedExt: 'arquivos .{ext} não são suportados',
     copySuffix: 'cópia',
     menuHelp: 'Ajuda',
     thirdPartyNotices: 'Avisos de software de terceiros',
-    hermesGwTitle: 'Gateway Hermes',
-    hermesGwBody:
-      'O gateway Hermes não está em execução. Os recursos de IA do HermesOffice precisam do gateway local. Iniciar agora?',
-    hermesGwStart: 'Iniciar',
-    hermesGwNotNow: 'Agora não',
-    hermesGwNever: 'Não perguntar novamente',
-    hermesGwAlways: 'Sempre iniciar automaticamente',
-    hermesGwFailed: 'Falha ao iniciar o gateway; execute hermes gateway start em um terminal.',
+    menuExportDocx: 'Exportar como Word…',
+    pdfDocxLoginMsg: 'Exportar como Word requer login no Genspark.',
+    pdfDocxLoginDetail:
+      'Clique em “Entrar” para autorizar no navegador; depois, clique em Exportar novamente.',
+    pdfDocxBtnLogin: 'Entrar',
+    pdfDocxConfirmMsg: 'Enviar este PDF para a nuvem do Genspark e convertê-lo em Word?',
+    pdfDocxConfirmDetail:
+      'A conversão custa 5 créditos. O arquivo será enviado para processamento na nuvem.',
+    pdfDocxConfirmBalance: 'Saldo atual: {balance} créditos.',
+    pdfDocxBtnConvert: 'Continuar',
+    btnCancel: 'Cancelar',
+    pdfDocxFailedMsg: 'Falha ao exportar como Word',
+    pdfDocxNoCliMsg:
+      'Não é possível iniciar sessão no Genspark: falta um componente necessário (gsk). Reinstale o aplicativo.',
+    pdfDocxBusyMsg: 'Já há uma exportação para Word em andamento. Aguarde a conclusão.',
   },
   it: {
     menuFile: 'File',
@@ -731,18 +855,26 @@ const tMain = createI18n({
     errMissing: 'File non trovato',
     errExists: 'Esiste già un file con questo nome',
     errRenameFailed: 'Impossibile rinominare',
+    errNewTabFailed: 'Impossibile creare il nuovo documento',
     errUnsupportedExt: 'i file .{ext} non sono supportati',
     copySuffix: 'copia',
     menuHelp: 'Aiuto',
     thirdPartyNotices: 'Note sul software di terze parti',
-    hermesGwTitle: 'Gateway Hermes',
-    hermesGwBody:
-      'Il gateway Hermes non è in esecuzione. Le funzioni IA di HermesOffice lo richiedono. Avviarlo ora?',
-    hermesGwStart: 'Avvia',
-    hermesGwNotNow: 'Non ora',
-    hermesGwNever: 'Non chiedere più',
-    hermesGwAlways: 'Avvia sempre automaticamente',
-    hermesGwFailed: 'Avvio del gateway non riuscito; esegui hermes gateway start in un terminale.',
+    menuExportDocx: 'Esporta come Word…',
+    pdfDocxLoginMsg: 'Per esportare come Word è necessario accedere a Genspark.',
+    pdfDocxLoginDetail:
+      'Fai clic su “Accedi” per autorizzare nel browser; al termine, fai di nuovo clic su Esporta.',
+    pdfDocxBtnLogin: 'Accedi',
+    pdfDocxConfirmMsg: 'Caricare questo PDF sul cloud Genspark e convertirlo in Word?',
+    pdfDocxConfirmDetail:
+      "La conversione costa 5 crediti. Il file verrà caricato per l'elaborazione nel cloud.",
+    pdfDocxConfirmBalance: 'Saldo attuale: {balance} crediti.',
+    pdfDocxBtnConvert: 'Continua',
+    btnCancel: 'Annulla',
+    pdfDocxFailedMsg: 'Esportazione in Word non riuscita',
+    pdfDocxNoCliMsg:
+      "Impossibile accedere a Genspark: manca un componente necessario (gsk). Reinstallare l'app.",
+    pdfDocxBusyMsg: "Un'esportazione in Word è già in corso. Attendi il completamento.",
   },
   pl: {
     menuFile: 'Plik',
@@ -772,18 +904,26 @@ const tMain = createI18n({
     errMissing: 'Nie znaleziono pliku',
     errExists: 'Plik o tej nazwie już istnieje',
     errRenameFailed: 'Nie udało się zmienić nazwy',
+    errNewTabFailed: 'Nie udało się utworzyć nowego dokumentu',
     errUnsupportedExt: 'pliki .{ext} nie są obsługiwane',
     copySuffix: 'kopia',
     menuHelp: 'Pomoc',
     thirdPartyNotices: 'Informacje o oprogramowaniu innych firm',
-    hermesGwTitle: 'Brama Hermes',
-    hermesGwBody:
-      'Brama Hermes nie działa. Funkcje AI HermesOffice wymagają lokalnej bramy. Uruchomić ją teraz?',
-    hermesGwStart: 'Uruchom',
-    hermesGwNotNow: 'Nie teraz',
-    hermesGwNever: 'Nie pytaj ponownie',
-    hermesGwAlways: 'Zawsze uruchamiaj automatycznie',
-    hermesGwFailed: 'Nie udało się uruchomić bramy; wykonaj hermes gateway start w terminalu.',
+    menuExportDocx: 'Eksportuj jako Word…',
+    pdfDocxLoginMsg: 'Eksport do formatu Word wymaga zalogowania do Genspark.',
+    pdfDocxLoginDetail:
+      'Kliknij „Zaloguj się”, aby autoryzować w przeglądarce; po zakończeniu kliknij Eksportuj ponownie.',
+    pdfDocxBtnLogin: 'Zaloguj się',
+    pdfDocxConfirmMsg: 'Przesłać ten PDF do chmury Genspark i przekonwertować na Word?',
+    pdfDocxConfirmDetail:
+      'Konwersja kosztuje 5 kredytów. Plik zostanie przesłany do przetworzenia w chmurze.',
+    pdfDocxConfirmBalance: 'Aktualne saldo: {balance} kredytów.',
+    pdfDocxBtnConvert: 'Kontynuuj',
+    btnCancel: 'Anuluj',
+    pdfDocxFailedMsg: 'Eksport do formatu Word nie powiódł się',
+    pdfDocxNoCliMsg:
+      'Nie można zalogować się do Genspark: brakuje wymaganego komponentu (gsk). Zainstaluj aplikację ponownie.',
+    pdfDocxBusyMsg: 'Eksport do formatu Word już trwa. Poczekaj na jego zakończenie.',
   },
   nl: {
     menuFile: 'Bestand',
@@ -813,19 +953,26 @@ const tMain = createI18n({
     errMissing: 'Bestand niet gevonden',
     errExists: 'Er bestaat al een bestand met die naam',
     errRenameFailed: 'Naam wijzigen mislukt',
+    errNewTabFailed: 'Kan het nieuwe document niet maken',
     errUnsupportedExt: '.{ext}-bestanden worden niet ondersteund',
     copySuffix: 'kopie',
     menuHelp: 'Help',
     thirdPartyNotices: 'Kennisgevingen over software van derden',
-    hermesGwTitle: 'Hermes-gateway',
-    hermesGwBody:
-      'De Hermes-gateway draait niet. De AI-functies van HermesOffice hebben de lokale gateway nodig. Nu starten?',
-    hermesGwStart: 'Starten',
-    hermesGwNotNow: 'Niet nu',
-    hermesGwNever: 'Niet meer vragen',
-    hermesGwAlways: 'Altijd automatisch starten',
-    hermesGwFailed:
-      'Het starten van de gateway is mislukt; voer hermes gateway start uit in een terminal.',
+    menuExportDocx: 'Exporteren als Word…',
+    pdfDocxLoginMsg: 'Exporteren als Word vereist inloggen bij Genspark.',
+    pdfDocxLoginDetail:
+      'Klik op “Inloggen” om in de browser te autoriseren; klik daarna opnieuw op Exporteren.',
+    pdfDocxBtnLogin: 'Inloggen',
+    pdfDocxConfirmMsg: 'Deze PDF uploaden naar de Genspark-cloud en converteren naar Word?',
+    pdfDocxConfirmDetail:
+      'De conversie kost 5 credits. Het bestand wordt geüpload voor verwerking in de cloud.',
+    pdfDocxConfirmBalance: 'Huidig saldo: {balance} credits.',
+    pdfDocxBtnConvert: 'Doorgaan',
+    btnCancel: 'Annuleren',
+    pdfDocxFailedMsg: 'Exporteren als Word mislukt',
+    pdfDocxNoCliMsg:
+      'Kan niet inloggen bij Genspark: een vereist onderdeel (gsk) ontbreekt. Installeer de app opnieuw.',
+    pdfDocxBusyMsg: 'Er is al een Word-export bezig. Wacht tot deze is voltooid.',
   },
   ms: {
     menuFile: 'Fail',
@@ -855,18 +1002,26 @@ const tMain = createI18n({
     errMissing: 'Fail tidak ditemui',
     errExists: 'Fail dengan nama yang sama sudah wujud',
     errRenameFailed: 'Gagal menamakan semula',
+    errNewTabFailed: 'Gagal mencipta dokumen baharu',
     errUnsupportedExt: 'fail .{ext} tidak disokong',
     copySuffix: 'salinan',
     menuHelp: 'Bantuan',
     thirdPartyNotices: 'Notis Perisian Pihak Ketiga',
-    hermesGwTitle: 'Gateway Hermes',
-    hermesGwBody:
-      'Gateway Hermes tidak berjalan. Ciri AI HermesOffice memerlukan gateway setempat. Mulakan sekarang?',
-    hermesGwStart: 'Mula',
-    hermesGwNotNow: 'Bukan sekarang',
-    hermesGwNever: 'Jangan tanya lagi',
-    hermesGwAlways: 'Sentiasa mula secara automatik',
-    hermesGwFailed: 'Gateway gagal dimulakan; jalankan hermes gateway start dalam terminal.',
+    menuExportDocx: 'Eksport sebagai Word…',
+    pdfDocxLoginMsg: 'Eksport sebagai Word memerlukan log masuk ke Genspark.',
+    pdfDocxLoginDetail:
+      'Klik “Log Masuk” untuk membuka pelayar dan memberi kebenaran; selepas selesai, klik Eksport sekali lagi.',
+    pdfDocxBtnLogin: 'Log Masuk',
+    pdfDocxConfirmMsg: 'Muat naik PDF ini ke awan Genspark untuk ditukar kepada Word?',
+    pdfDocxConfirmDetail:
+      'Penukaran ini menggunakan 5 kredit. Fail akan dimuat naik untuk diproses di awan.',
+    pdfDocxConfirmBalance: 'Baki semasa: {balance} kredit.',
+    pdfDocxBtnConvert: 'Teruskan',
+    btnCancel: 'Batal',
+    pdfDocxFailedMsg: 'Gagal mengeksport sebagai Word',
+    pdfDocxNoCliMsg:
+      'Tidak dapat log masuk ke Genspark: komponen yang diperlukan (gsk) tiada. Sila pasang semula aplikasi.',
+    pdfDocxBusyMsg: 'Eksport ke Word sedang dijalankan. Sila tunggu sehingga selesai.',
   },
   he: {
     menuFile: 'קובץ',
@@ -896,18 +1051,23 @@ const tMain = createI18n({
     errMissing: 'הקובץ לא נמצא',
     errExists: 'כבר קיים קובץ באותו שם',
     errRenameFailed: 'שינוי השם נכשל',
+    errNewTabFailed: 'יצירת המסמך החדש נכשלה',
     errUnsupportedExt: 'קובצי .{ext} אינם נתמכים',
     copySuffix: 'עותק',
     menuHelp: 'עזרה',
     thirdPartyNotices: 'הודעות על תוכנות צד שלישי',
-    hermesGwTitle: 'שער Hermes',
-    hermesGwBody:
-      'שער Hermes אינו פועל. תכונות ה-AI של HermesOffice זקוקות לשער המקומי. להפעיל עכשיו?',
-    hermesGwStart: 'הפעל',
-    hermesGwNotNow: 'לא עכשיו',
-    hermesGwNever: 'אל תשאל שוב',
-    hermesGwAlways: 'הפעל תמיד אוטומטית',
-    hermesGwFailed: 'הפעלת השער נכשלה; הריצו hermes gateway start בטרמינל.',
+    menuExportDocx: 'ייצוא כ-Word…',
+    pdfDocxLoginMsg: 'ייצוא כ-Word דורש התחברות ל-Genspark.',
+    pdfDocxLoginDetail: 'לחיצה על ”התחברות” תפתח את הדפדפן לאישור; בסיום, לחצו שוב על ייצוא.',
+    pdfDocxBtnLogin: 'התחברות',
+    pdfDocxConfirmMsg: 'להעלות את ה-PDF לענן של Genspark ולהמיר אותו ל-Word?',
+    pdfDocxConfirmDetail: 'ההמרה עולה 5 קרדיטים. הקובץ יועלה לעיבוד בענן.',
+    pdfDocxConfirmBalance: 'יתרה נוכחית: {balance} קרדיטים.',
+    pdfDocxBtnConvert: 'המשך',
+    btnCancel: 'ביטול',
+    pdfDocxFailedMsg: 'הייצוא כ-Word נכשל',
+    pdfDocxNoCliMsg: 'לא ניתן להתחבר ל-Genspark: רכיב נדרש (gsk) חסר. נא להתקין מחדש את האפליקציה.',
+    pdfDocxBusyMsg: 'ייצוא ל-Word כבר מתבצע. נא להמתין לסיומו.',
   },
   hi: {
     menuFile: 'फ़ाइल',
@@ -937,18 +1097,26 @@ const tMain = createI18n({
     errMissing: 'फ़ाइल नहीं मिली',
     errExists: 'इस नाम की फ़ाइल पहले से मौजूद है',
     errRenameFailed: 'नाम बदलने में विफल',
+    errNewTabFailed: 'नया दस्तावेज़ बनाने में विफल',
     errUnsupportedExt: '.{ext} फ़ाइलें समर्थित नहीं हैं',
     copySuffix: 'प्रतिलिपि',
     menuHelp: 'सहायता',
     thirdPartyNotices: 'तृतीय-पक्ष सॉफ़्टवेयर सूचनाएँ',
-    hermesGwTitle: 'Hermes गेटवे',
-    hermesGwBody:
-      'Hermes गेटवे नहीं चल रहा है। HermesOffice की AI सुविधाओं को स्थानीय गेटवे चाहिए। अभी शुरू करें?',
-    hermesGwStart: 'शुरू करें',
-    hermesGwNotNow: 'अभी नहीं',
-    hermesGwNever: 'फिर न पूछें',
-    hermesGwAlways: 'हमेशा स्वतः शुरू करें',
-    hermesGwFailed: 'गेटवे शुरू नहीं हो सका; टर्मिनल में hermes gateway start चलाएँ।',
+    menuExportDocx: 'Word के रूप में निर्यात करें…',
+    pdfDocxLoginMsg: 'Word के रूप में निर्यात करने के लिए Genspark में लॉगिन आवश्यक है।',
+    pdfDocxLoginDetail:
+      '“लॉगिन” पर क्लिक करने से ब्राउज़र में प्राधिकरण खुलेगा; पूरा होने पर फिर से निर्यात पर क्लिक करें।',
+    pdfDocxBtnLogin: 'लॉगिन',
+    pdfDocxConfirmMsg: 'इस PDF को Genspark क्लाउड पर अपलोड करके Word में बदलें?',
+    pdfDocxConfirmDetail:
+      'रूपांतरण में 5 क्रेडिट लगते हैं। फ़ाइल क्लाउड में प्रोसेसिंग के लिए अपलोड की जाएगी।',
+    pdfDocxConfirmBalance: 'वर्तमान शेष: {balance} क्रेडिट।',
+    pdfDocxBtnConvert: 'जारी रखें',
+    btnCancel: 'रद्द करें',
+    pdfDocxFailedMsg: 'Word के रूप में निर्यात विफल रहा',
+    pdfDocxNoCliMsg:
+      'Genspark में साइन इन नहीं किया जा सकता: आवश्यक घटक (gsk) मौजूद नहीं है। कृपया ऐप को फिर से इंस्टॉल करें।',
+    pdfDocxBusyMsg: 'Word के रूप में निर्यात पहले से चल रहा है। कृपया पूरा होने तक प्रतीक्षा करें।',
   },
   'zh-TW': {
     menuFile: '檔案',
@@ -978,17 +1146,23 @@ const tMain = createI18n({
     errMissing: '檔案不存在',
     errExists: '同名檔案已存在',
     errRenameFailed: '重新命名失敗',
+    errNewTabFailed: '新建文件失敗',
     errUnsupportedExt: '暫不支援 .{ext} 類型',
     copySuffix: '副本',
     menuHelp: '說明',
     thirdPartyNotices: '第三方軟體聲明',
-    hermesGwTitle: 'Hermes 閘道',
-    hermesGwBody: 'Hermes 閘道未在執行。HermesOffice 的 AI 功能需要本機閘道。現在啟動嗎？',
-    hermesGwStart: '啟動',
-    hermesGwNotNow: '暫不',
-    hermesGwNever: '不再詢問',
-    hermesGwAlways: '總是自動啟動',
-    hermesGwFailed: '閘道啟動失敗，請在終端機手動執行 hermes gateway start。',
+    menuExportDocx: '匯出為 Word…',
+    pdfDocxLoginMsg: '匯出為 Word 需要登入 Genspark 帳號。',
+    pdfDocxLoginDetail: '點擊「登入」將開啟瀏覽器完成授權，完成後請重新點擊匯出。',
+    pdfDocxBtnLogin: '登入',
+    pdfDocxConfirmMsg: '將此 PDF 上傳到 Genspark 雲端轉換為 Word？',
+    pdfDocxConfirmDetail: '本次轉換將消耗 5 credits，檔案將上傳至雲端處理。',
+    pdfDocxConfirmBalance: '目前餘額 {balance} credits。',
+    pdfDocxBtnConvert: '繼續',
+    btnCancel: '取消',
+    pdfDocxFailedMsg: '匯出為 Word 失敗',
+    pdfDocxNoCliMsg: '無法登入 Genspark：缺少必要元件（gsk），請重新安裝應用程式。',
+    pdfDocxBusyMsg: '正在轉換中，請等待目前的匯出完成。',
   },
 })
 
@@ -1280,7 +1454,38 @@ async function newSheetTab(): Promise<void> {
     openDocumentPath(filePath)
   } catch (err) {
     console.warn('[shell] blank workbook create failed, opening in-memory blank tab:', err)
-    tabManager?.openSheetsTab(undefined, { newBlank: true })
+    try {
+      tabManager?.openSheetsTab(undefined, { newBlank: true })
+    } catch (fallbackErr) {
+      surfaceNewTabError(fallbackErr)
+    }
+  }
+}
+
+/**
+ * A throw anywhere in the create-tab path (view creation, sidecar resolution,
+ * renderer load) used to be swallowed by `void`-ed promises and ipc-invoke
+ * rejections, so the click looked like a pure no-op — the exact "AI Sheets /
+ * AI Slides do nothing" alpha report. Surface the failure instead.
+ */
+function surfaceNewTabError(err: unknown): void {
+  console.error('[shell] new tab failed:', err)
+  showErrorDialog(shellWindow, tm('errNewTabFailed'), err)
+}
+
+function newDocTab(): void {
+  try {
+    tabManager?.openDocsTab(undefined, { newBlank: true })
+  } catch (err) {
+    surfaceNewTabError(err)
+  }
+}
+
+function newSlideTab(): void {
+  try {
+    tabManager?.openSlidesTab()
+  } catch (err) {
+    surfaceNewTabError(err)
   }
 }
 
@@ -1313,8 +1518,8 @@ function statEntries(paths: string[]): RecentEntry[] {
 }
 
 function registerHomeIpc(): void {
-  // Fork: "conta" = gateway Hermes local (API server :8642). Nada de login
-  // Hermes — o status reflete a disponibilidade do agente Hermes.
+  // Fork: signed-in means the local Hermes gateway is reachable — no remote
+  // account, no gsk CLI. The health endpoint answers {status, version}.
   ipcMain.handle(HOME_CHANNELS.accountStatus, async () => {
     try {
       const ctrl = new AbortController()
@@ -1336,8 +1541,13 @@ function registerHomeIpc(): void {
     return null
   })
 
+  ipcMain.handle(HOME_CHANNELS.accountLoginOpenUrl, () => {
+    // Fork: no remote login flow, nothing to open
+  })
+
   ipcMain.handle(HOME_CHANNELS.accountLogout, async () => {
-    // Fork: não há conta remota para encerrar sessão
+    // Fork: não há conta remota para encerrar sessão; só limpa o cache local
+    clearCloudProjectsStore(cloudProjectsStorePath())
   })
 
   ipcMain.handle(HOME_CHANNELS.getAppVersion, (): string => app.getVersion())
@@ -1373,7 +1583,7 @@ function registerHomeIpc(): void {
   ipcMain.handle(HOME_CHANNELS.browse, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? shellWindow
     if (!win) return
-    const result = await dialog.showOpenDialog(win, {
+    const result = await showOpenDialogWithMemory(dialog, win, {
       title: tm('dlgOpenTitle'),
       filters: [
         { name: tm('filterSupported'), extensions: OPEN_DIALOG_EXTENSIONS },
@@ -1391,7 +1601,7 @@ function registerHomeIpc(): void {
     if (opts?.projectId && opts.projectId !== 'default') {
       pendingNewFileProject.set('doc', opts.projectId)
     }
-    tabManager?.openDocsTab(undefined, { newBlank: true })
+    newDocTab()
   })
 
   ipcMain.handle(HOME_CHANNELS.newSheet, (_event, opts?: { projectId?: string }) => {
@@ -1405,7 +1615,7 @@ function registerHomeIpc(): void {
     if (opts?.projectId && opts.projectId !== 'default') {
       pendingNewFileProject.set('slide', opts.projectId)
     }
-    tabManager?.openSlidesTab()
+    newSlideTab()
   })
 
   ipcMain.handle(HOME_CHANNELS.removeRecent, (_event, paths: unknown) => {
@@ -1496,6 +1706,14 @@ function registerHomeIpc(): void {
     for (const wc of webContents.getAllWebContents()) wc.send('app:language-changed', lang)
   })
 
+  ipcMain.handle(HOME_CHANNELS.getUpdateChannel, (): UpdateChannel => currentUpdateChannel())
+
+  ipcMain.handle(HOME_CHANNELS.setUpdateChannel, (_event, channel: unknown) => {
+    if (!isUpdateChannel(channel) || channel === currentUpdateChannel()) return
+    writeAppSetting(APP_SETTINGS_PATH(), 'updateChannel', channel)
+    applyUpdateChannel(channel)
+  })
+
   ipcMain.handle(
     HOME_CHANNELS.onboardingSeen,
     (): boolean => readAppSettings(APP_SETTINGS_PATH()).onboardingSeen === true,
@@ -1511,7 +1729,7 @@ function registerHomeIpc(): void {
     })
   })
 
-  // Fork onboarding: live gateway status for the "Connect to Hermes" slide
+  // fork: probe the local Hermes gateway (onboarding)
   ipcMain.handle(HOME_CHANNELS.hermesStatus, async (): Promise<'ok' | 'offline'> => {
     try {
       const response = await fetch(hermesHealthUrl(''), { signal: AbortSignal.timeout(2000) })
@@ -1519,6 +1737,19 @@ function registerHomeIpc(): void {
     } catch {
       return 'offline'
     }
+  })
+
+  const cloudProjectsStorePath = () => join(app.getPath('userData'), 'cloud-projects.json')
+
+  ipcMain.handle(HOME_CHANNELS.cloudProjectsCached, () =>
+    readCloudProjectsStore(cloudProjectsStorePath()),
+  )
+
+  ipcMain.handle(HOME_CHANNELS.cloudProjects, () => syncCloudProjects(cloudProjectsStorePath()))
+
+  ipcMain.handle(HOME_CHANNELS.openCloudProject, (_event, projectUrl: unknown) => {
+    const url = cloudProjectExternalUrl(projectUrl)
+    if (url) void shell.openExternal(url)
   })
 }
 
@@ -1535,14 +1766,31 @@ function loadMenuIcon(path1x: string, path2x: string): NativeImage {
 }
 
 // loaded once, not on every menu open
-let menuIconCache: { docx: NativeImage; xlsx: NativeImage; pptx: NativeImage } | null = null
-function menuIcons(): { docx: NativeImage; xlsx: NativeImage; pptx: NativeImage } {
+interface MenuIconSet {
+  docx: NativeImage
+  xlsx: NativeImage
+  pptx: NativeImage
+  pdf: NativeImage
+  home: NativeImage
+}
+let menuIconCache: MenuIconSet | null = null
+function menuIcons(): MenuIconSet {
   menuIconCache ??= {
     docx: loadMenuIcon(menuDocxIcon1x, menuDocxIcon2x),
     xlsx: loadMenuIcon(menuXlsxIcon1x, menuXlsxIcon2x),
     pptx: loadMenuIcon(menuPptxIcon1x, menuPptxIcon2x),
+    pdf: loadMenuIcon(menuPdfIcon1x, menuPdfIcon2x),
+    home: loadMenuIcon(menuHomeIcon1x, menuHomeIcon2x),
   }
   return menuIconCache
+}
+
+const TAB_MENU_ICON: Record<TabKind, keyof MenuIconSet> = {
+  home: 'home',
+  docs: 'docx',
+  sheets: 'xlsx',
+  slides: 'pptx',
+  pdf: 'pdf',
 }
 
 function registerTabsIpc(): void {
@@ -1561,6 +1809,7 @@ function registerTabsIpc(): void {
         label: tab.title,
         type: 'checkbox' as const,
         checked: tab.active,
+        icon: menuIcons()[TAB_MENU_ICON[tab.kind]],
         click: () => tabManager?.activateTab(tab.id),
       })),
     )
@@ -1581,7 +1830,7 @@ function registerTabsIpc(): void {
       {
         label: tm('menuNewDoc'),
         icon: menuIcons().docx,
-        click: () => tabManager?.openDocsTab(undefined, { newBlank: true }),
+        click: () => newDocTab(),
       },
       {
         label: tm('menuNewSheet'),
@@ -1591,7 +1840,7 @@ function registerTabsIpc(): void {
       {
         label: tm('menuNewSlide'),
         icon: menuIcons().pptx,
-        click: () => tabManager?.openSlidesTab(),
+        click: () => newSlideTab(),
       },
       { type: 'separator' },
       { label: tm('menuOpen'), click: () => void openFileViaDialog() },
@@ -1610,7 +1859,7 @@ function registerTabsIpc(): void {
 async function openFileViaDialog(): Promise<void> {
   const win = shellWindow ?? BrowserWindow.getFocusedWindow()
   if (!win) return
-  const result = await dialog.showOpenDialog(win, {
+  const result = await showOpenDialogWithMemory(dialog, win, {
     filters: [{ name: tm('filterSupported'), extensions: OPEN_DIALOG_EXTENSIONS }],
     properties: ['openFile'],
   })
@@ -1628,13 +1877,13 @@ function buildHomeMenu(): void {
         {
           label: tm('menuNewDoc'),
           accelerator: 'CmdOrCtrl+N',
-          click: () => tabManager?.openDocsTab(undefined, { newBlank: true }),
+          click: () => newDocTab(),
         },
         {
           label: tm('menuNewSheet'),
           click: () => void newSheetTab(),
         },
-        { label: tm('menuNewSlide'), click: () => tabManager?.openSlidesTab() },
+        { label: tm('menuNewSlide'), click: () => newSlideTab() },
         { type: 'separator' },
         {
           label: tm('menuOpen'),
@@ -1645,8 +1894,8 @@ function buildHomeMenu(): void {
         { role: 'close', label: tm('menuClose') },
       ],
     },
-    { role: 'editMenu', label: tm('menuEdit') },
-    { role: 'windowMenu', label: tm('menuWindow') },
+    editMenuTemplate(process.platform, appMenuLabels(currentLang())),
+    windowMenuTemplate(process.platform, appMenuLabels(currentLang())),
     {
       role: 'help',
       label: tm('menuHelp'),
@@ -1692,14 +1941,19 @@ function buildPdfMenu(): void {
         },
         { type: 'separator' },
         {
+          label: tm('menuExportDocx'),
+          click: () => void exportPdfAsDocx(),
+        },
+        { type: 'separator' },
+        {
           label: tm('menuClose'),
           accelerator: 'CmdOrCtrl+W',
           click: () => tabManager?.closeActiveTab(),
         },
       ],
     },
-    { role: 'editMenu', label: tm('menuEdit') },
-    { role: 'windowMenu', label: tm('menuWindow') },
+    editMenuTemplate(process.platform, appMenuLabels(currentLang())),
+    windowMenuTemplate(process.platform, appMenuLabels(currentLang())),
     {
       role: 'help',
       label: tm('menuHelp'),
@@ -1709,18 +1963,144 @@ function buildPdfMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-/** Save As for pdf tabs: flush pending edits into the original, copy it, open the copy */
+/**
+ * Save As for pdf tabs: write pending edits to the picked path only, then open the copy.
+ * Non-destructive: the original file is never written, and a cancelled dialog changes
+ * nothing on disk (dialog first, no flush into the source).
+ */
+/** In-flight guard (same pattern as exportPdfAsDocx): a re-trigger while the dialog
+    or write is active must not start a second flow that overwrites the first one's
+    waiter/target grant or clears its autosave pause early */
+let savingPdfAs = false
+
 async function savePdfAs(): Promise<void> {
   const tab = tabManager?.activePdfTab()
+  if (!tab?.filePath || !shellWindow || savingPdfAs) return
+  savingPdfAs = true
+  // Pause renderer autosave for the whole flow: the dialog blurs the window, and a
+  // blur-triggered autosave would write the pending edits into the original file
+  setPdfSaveAsInFlight(tab.webContents, true)
+  try {
+    const picked = await showSaveDialogWithMemory(dialog, shellWindow, {
+      defaultPath: tab.filePath,
+      filters: [{ name: tm('filterPdf'), extensions: ['pdf'] }],
+    })
+    if (picked.canceled || !picked.filePath || picked.filePath === tab.filePath) return
+    if (pdfIsDirty(tab.webContents.id)) {
+      // Renderer applies its pending edits onto the source bytes; the pdf main
+      // process writes the result to the picked path only
+      if (!(await requestPdfSaveAs(tab.webContents, picked.filePath))) return
+    } else {
+      // No pending edits → a byte-identical copy
+      copyFileSync(tab.filePath, picked.filePath)
+    }
+    openDocumentPath(picked.filePath)
+  } finally {
+    savingPdfAs = false
+    setPdfSaveAsInFlight(tab.webContents, false)
+  }
+}
+
+/**
+ * In-flight guard: covers the whole flow (dialogs included, conversion takes
+ * ~10s+) so re-triggering from the menu can never start a second paid conversion
+ */
+let exportingPdfDocx = false
+
+/**
+ * Export as Word for pdf tabs: flush pending edits, confirm the 5-credit cost,
+ * pick the destination, then upload + cloud-convert via gsk file_convert. Not
+ * logged in → offer browser login and let the user re-trigger the export
+ * afterwards. The destination is picked before converting so cancelling the
+ * save dialog never wastes a paid conversion.
+ */
+async function exportPdfAsDocx(): Promise<void> {
+  const tab = tabManager?.activePdfTab()
   if (!tab?.filePath || !shellWindow) return
-  if (!(await flushPdfSave(tab.webContents))) return
-  const picked = await dialog.showSaveDialog(shellWindow, {
-    defaultPath: tab.filePath,
-    filters: [{ name: tm('filterPdf'), extensions: ['pdf'] }],
-  })
-  if (picked.canceled || !picked.filePath || picked.filePath === tab.filePath) return
-  copyFileSync(tab.filePath, picked.filePath)
-  openDocumentPath(picked.filePath)
+  if (exportingPdfDocx) {
+    // Re-triggered while a previous export (dialogs or cloud conversion) is
+    // still in flight: tell the user instead of silently ignoring the click.
+    void dialog.showMessageBox(shellWindow, {
+      type: 'info',
+      message: tm('pdfDocxBusyMsg'),
+    })
+    return
+  }
+  exportingPdfDocx = true
+  try {
+    if (!(await flushPdfSave(tab.webContents))) return
+    if (!hasGskAuth()) {
+      // hasGskAuth() is also false when the gsk CLI itself cannot be resolved
+      // (broken install); Sign In could not launch in that case, so surface
+      // the real problem instead of a login dialog that cannot succeed.
+      if (!resolveGskEntry()) {
+        void dialog.showMessageBox(shellWindow, {
+          type: 'error',
+          message: tm('pdfDocxNoCliMsg'),
+        })
+        return
+      }
+      const { response } = await dialog.showMessageBox(shellWindow, {
+        type: 'info',
+        message: tm('pdfDocxLoginMsg'),
+        detail: tm('pdfDocxLoginDetail'),
+        buttons: [tm('pdfDocxBtnLogin'), tm('btnCancel')],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      })
+      if (response === 0) ensureGenofficeLogin((url) => void shell.openExternal(url))
+      return
+    }
+    const balance = (await gskLoginInfo())?.creditBalance
+    const balanceLine =
+      balance === undefined
+        ? ''
+        : ` ${tm('pdfDocxConfirmBalance', { balance: Math.floor(balance).toLocaleString('en-US') })}`
+    const confirm = await dialog.showMessageBox(shellWindow, {
+      type: 'question',
+      message: tm('pdfDocxConfirmMsg'),
+      detail: `${tm('pdfDocxConfirmDetail')}${balanceLine}`,
+      buttons: [tm('pdfDocxBtnConvert'), tm('btnCancel')],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    })
+    if (confirm.response !== 0) return
+    const picked = await showSaveDialogWithMemory(dialog, shellWindow, {
+      defaultPath: tab.filePath.replace(/\.pdf$/i, '.docx'),
+      filters: [{ name: tm('filterWord'), extensions: ['docx'] }],
+    })
+    if (picked.canceled || !picked.filePath) return
+    // If the destination is already open in a docs tab, close it first (its
+    // normal unsaved-changes guard applies) so the converted file opens fresh
+    // instead of leaving a stale tab whose next save would clobber the result.
+    // Cancelling the close aborts the export before any credits are spent.
+    const staleTabId = tabManager?.findDocsTabByPath(picked.filePath)
+    if (staleTabId) {
+      await tabManager?.closeTab(staleTabId)
+      // closeTab activates the docs tab for its unsaved-changes prompt (and a
+      // fallback tab after a successful close), so bring the pdf tab back
+      // either way — especially when the user cancels and the export aborts.
+      tabManager?.activateTab(tab.id)
+      if (tabManager?.findDocsTabByPath(picked.filePath)) return
+    }
+    shellWindow.setProgressBar(2)
+    const bytes = await gskConvertPdfToDocx(tab.filePath)
+    writeFileSync(picked.filePath, bytes)
+    openDocumentPath(picked.filePath)
+  } catch (err) {
+    if (shellWindow && !shellWindow.isDestroyed()) {
+      void dialog.showMessageBox(shellWindow, {
+        type: 'error',
+        message: tm('pdfDocxFailedMsg'),
+        detail: err instanceof Error ? err.message : String(err),
+      })
+    }
+  } finally {
+    exportingPdfDocx = false
+    if (shellWindow && !shellWindow.isDestroyed()) shellWindow.setProgressBar(-1)
+  }
 }
 
 function openThirdPartyNotices(): Promise<string> {
@@ -1749,13 +2129,13 @@ function installDockMenu(): void {
       { label: tm('menuHome'), click: () => tabManager?.openHomeTab() },
       {
         label: tm('menuNewDoc'),
-        click: () => tabManager?.openDocsTab(undefined, { newBlank: true }),
+        click: () => newDocTab(),
       },
       {
         label: tm('menuNewSheet'),
         click: () => void newSheetTab(),
       },
-      { label: tm('menuNewSlide'), click: () => tabManager?.openSlidesTab() },
+      { label: tm('menuNewSlide'), click: () => newSlideTab() },
     ]),
   )
 }
@@ -1776,7 +2156,9 @@ async function installMainProcessProxy(): Promise<void> {
   ].find((v) => v && /^https?:\/\//.test(v))
   if (!proxyUrl) {
     try {
-      const resolved = await session.defaultSession.resolveProxy('https://api.anthropic.com/')
+      // PAC/rule proxies answer per-host: probe the host the login flow, the
+      // Genspark LLM proxy and the gsk CLI actually target
+      const resolved = await session.defaultSession.resolveProxy('https://www.genspark.ai/')
       const m = /PROXY\s+([^;\s]+)/.exec(resolved)
       if (m) proxyUrl = `http://${m[1]}`
     } catch {
@@ -1784,6 +2166,9 @@ async function installMainProcessProxy(): Promise<void> {
     }
   }
   if (!proxyUrl) return
+  // spawned gsk CLI children (login/search/…) do their own fetch and never see
+  // the dispatcher below — forward the proxy to them via env
+  setGskProxyUrl(proxyUrl)
   try {
     const { ProxyAgent, setGlobalDispatcher } = await import('undici')
     setGlobalDispatcher(new ProxyAgent(proxyUrl))
@@ -1831,6 +2216,7 @@ app.on('second-instance', (_event, argv, _cwd, additionalData) => {
 })
 
 installNavigationGuard(app)
+installContextMenu(app, () => contextMenuLabels(currentLang()))
 registerAiIpc()
 registerProjectIpc()
 registerDocsIpc()
@@ -1849,7 +2235,7 @@ app.whenReady().then(() => {
     return
   }
 
-  void installMainProcessProxy()
+  installMainProcessProxy()
   app.setAccessibilitySupportEnabled(true)
   // Settle the shared uiLang from saved settings BEFORE any tab renderer can
   // ask 'app:get-language': the editor handlers return the i18n module's
@@ -1861,18 +2247,7 @@ app.whenReady().then(() => {
   // deferred to ready: labels need currentLang(), which reads app.getLocale()
   installBackToHomeItems()
   installDockMenu()
-  initAutoUpdater(() => shellWindow)
-  initMainUpdater(() => shellWindow)
-  // Fork (#7): offer to start the local Hermes gateway when it is offline (consent-gated, never blocks startup)
-  void ensureHermesGateway(() => shellWindow, {
-    title: tm('hermesGwTitle'),
-    body: tm('hermesGwBody'),
-    start: tm('hermesGwStart'),
-    notNow: tm('hermesGwNotNow'),
-    never: tm('hermesGwNever'),
-    always: tm('hermesGwAlways'),
-    failed: tm('hermesGwFailed'),
-  })
+  initAutoUpdater(() => shellWindow, currentUpdateChannel())
 
   if (!pendingLaunchPath || !openDocumentPath(pendingLaunchPath)) tabManager?.openHomeTab()
   pendingLaunchPath = null

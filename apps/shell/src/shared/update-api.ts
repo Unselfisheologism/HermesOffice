@@ -31,6 +31,8 @@ export interface UpdateUiState {
   currentVersion: string
   /** 0-100, meaningful while downloading */
   percent: number
+  /** BCP-47 tag for documentElement.lang (drives CJK font selection) */
+  lang: string
   strings: UpdateUiStrings
 }
 
@@ -40,4 +42,11 @@ export interface UpdateWindowApi {
   install(): void
   later(): void
   onState(handler: (state: UpdateUiState) => void): () => void
+}
+
+/** user-selectable update channel; 'stable' maps to the latest.yml feed, 'beta' to beta.yml */
+export type UpdateChannel = 'stable' | 'beta'
+
+export function isUpdateChannel(v: unknown): v is UpdateChannel {
+  return v === 'stable' || v === 'beta'
 }

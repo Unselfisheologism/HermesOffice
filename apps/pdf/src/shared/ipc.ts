@@ -11,6 +11,9 @@ export const PDF_CHANNELS = {
   dirtyChanged: 'pdf:dirty-changed',
   closeSaveRequest: 'pdf:close-save-request',
   closeSaveResult: 'pdf:close-save-result',
+  saveAsRequest: 'pdf:save-as-request',
+  saveAsResult: 'pdf:save-as-result',
+  saveAsFlow: 'pdf:save-as-flow',
   getLanguage: 'app:get-language',
   languageChanged: 'app:language-changed',
   // Fork: abre um arquivo no app padrão do macOS (links clicáveis no chat)
@@ -46,6 +49,15 @@ export type DrawingInput =
   | (DrawBase & { kind: 'ellipse'; rect: [number, number, number, number] })
   | (DrawBase & { kind: 'line'; from: [number, number]; to: [number, number] })
   | (DrawBase & { kind: 'arrow'; from: [number, number]; to: [number, number] })
+  | {
+      /** Image signature/stamp placed by the user; written as a Stamp annotation */
+      kind: 'image'
+      pageIndex: number
+      /** base64 PNG, without the data: prefix */
+      image: string
+      /** PDF user space [x1,y1,x2,y2] */
+      rect: [number, number, number, number]
+    }
   | {
       kind: 'note'
       pageIndex: number
@@ -86,6 +98,12 @@ export interface FormValueInput {
 
 export interface SavePdfRequest {
   path: string
+  /**
+   * Save As destination. When set, `path` is only read (source bytes) and the edited PDF
+   * is written to this path instead — the original file must never be mutated.
+   * Must match the target granted to the view by the main process (save dialog pick).
+   */
+  targetPath?: string
   markups: MarkupInput[]
   drawings: DrawingInput[]
   formValues: FormValueInput[]
@@ -151,7 +169,7 @@ export interface PdfApi {
   consumePending(): Promise<string | null>
   /** Read pdf bytes. Only paths granted to this view are allowed */
   readFile(path: string): Promise<ArrayBuffer>
-  /** Write markups/form values/page ops back to the original file (pdf-lib, content streams untouched); path grants same as readFile */
+  /** Write markups/form values/page ops back to the original file (pdf-lib, content streams untouched); path grants same as readFile. With targetPath set (Save As), the original is only read and the result goes to targetPath */
   save(request: SavePdfRequest): Promise<SavePdfResult>
   extractPages(request: ExtractPagesRequest): Promise<ExtractPagesResult>
   insertPdf(request: InsertPdfRequest): Promise<InsertPdfResult>
@@ -163,6 +181,11 @@ export interface PdfApi {
   /** Main process picked "Save" in the close prompt → renderer saves and replies via sendCloseSaveResult */
   onCloseSaveRequest(handler: () => void): () => void
   sendCloseSaveResult(ok: boolean): void
+  /** Shell menu Save As → renderer writes pending edits to targetPath only (original untouched) and replies via sendSaveAsResult */
+  onSaveAsRequest(handler: (targetPath: string) => void): () => void
+  sendSaveAsResult(ok: boolean): void
+  /** True while the shell's Save As flow (dialog included) is open — the renderer pauses autosave, since the dialog's window blur would otherwise trigger a save into the original */
+  onSaveAsFlow(handler: (inFlight: boolean) => void): () => void
   getLanguage(): Promise<Lang>
   onLanguageChanged(handler: (lang: Lang) => void): () => void
   getAiSettings(): Promise<AiSettings>

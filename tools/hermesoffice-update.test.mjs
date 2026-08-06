@@ -187,6 +187,44 @@ test('prepare clones with a full working tree (no --no-checkout)', () => {
   }
 })
 
+test('prepare fetches tags with --force and resets to origin/main (stale local tag cannot wedge the update)', () => {
+  // Regression: a local ho-v* tag that diverges from the remote (e.g. the
+  // remote force-moved it) makes a plain `git fetch --tags` exit 1 with
+  // "would clobber existing tag" — the app then reports a bogus "download
+  // failed, check your network". prepare must force-adopt remote tags and
+  // reset against origin/main so a stale tag can never block the update.
+  const temp = mkdtempSync(join(tmpdir(), 'hermesoffice-update-test-'))
+  try {
+    const bin = join(temp, 'bin')
+    const src = join(temp, 'src')
+    const gitLog = join(temp, 'git-args.txt')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(join(src, '.git'), { recursive: true }) // existing checkout → no clone
+    executable(join(bin, 'git'), `printf '%s\\n' "$*" >> "${gitLog}"; exit 0`)
+    executable(join(bin, 'sh'), `printf '%s\\n' "${bin}/npm"`)
+    executable(join(bin, 'npm'), 'exit 0')
+
+    const result = spawnSync(process.execPath, [HELPER, 'prepare'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:/usr/bin:/bin`,
+        HERMESOFFICE_SOURCE_DIR: src,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+
+    const lines = readFileSync(gitLog, 'utf8').split('\n').filter(Boolean)
+    const tagsFetch = lines.find((l) => l.includes('fetch') && l.includes('--tags'))
+    assert.ok(tagsFetch, 'prepare must fetch tags: ' + lines.join(' | '))
+    assert.ok(tagsFetch.includes('--force'), `tags fetch must use --force: ${tagsFetch}`)
+    const reset = lines.find((l) => l.includes('reset'))
+    assert.ok(reset && reset.includes('origin/main'), `reset must target origin/main: ${reset}`)
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
+  }
+})
+
 test('install does not wait out the poll window on its own process (pgrep self-match)', () => {
   // Regression: the helper runs through the packaged HermesOffice binary
   // (ELECTRON_RUN_AS_NODE), so `pgrep -x HermesOffice` matches the helper

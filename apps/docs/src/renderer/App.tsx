@@ -13,6 +13,7 @@ import {
   type CustomNumberingLevel,
   type DocProtection,
   type HeaderFooter,
+  type HfImage,
   type NoteInfo,
   type SectionInfo,
   type SectionSettings,
@@ -27,7 +28,6 @@ import { AiPanel } from './ai/AiPanel'
 import { asianCharCount, countWords, nonAsianWordCount } from './word-count'
 import { toRoman } from './note-format'
 import { CommentsPanel } from './components/CommentsPanel'
-import { StylesPanel } from './components/StylesPanel'
 import { EquationModal } from './components/EquationModal'
 import { HeaderFooterArea } from './components/HeaderFooterArea'
 import { PaginationPreview } from './components/PaginationPreview'
@@ -49,15 +49,18 @@ import {
   pageAt,
   sectionColGeom,
   sectionColumns,
+  sectionFirstPages,
   sectionGeoms,
   sectionPageBox,
   effectiveTopPx,
   effectiveBottomPx,
+  formatPageNumber,
   type SectionGeom,
   type SectionHfHeights,
   type PageSlice,
 } from './pagination'
-import { setPageGaps, type PageGapSpec } from './editor/pagination-gaps'
+import { GAP_BAND, setPageGaps, type PageGapSpec } from './editor/pagination-gaps'
+import { hfHasVisibleContent, makeGapHfEl } from './editor/hf-dom'
 import {
   estimateFootnoteHeight,
   estimateHfHeight,
@@ -65,16 +68,19 @@ import {
   textHasCjk,
 } from './line-metrics'
 import { saveUntilPersisted } from './save-until-persisted'
+import { cachedByDoc } from './doc-cache'
+import { useShallowStable, useStableCallbacks } from './use-stable'
 import { FindPanel } from './components/FindPanel'
 import { Ribbon } from './components/Ribbon'
+import { computeFormatState } from './components/ribbon-format-state'
 import { IconRedo, IconSave, IconUndo } from './components/icons'
+import { ToastHost } from './components/toast'
 import {
   LinkInsertModal,
   insertImageFromDataUrl,
   insertImageViaDialog,
   insertPageBreakAt,
   insertTableAt,
-  setParaAttrs,
   type InkPenSettings,
   type RevisionDisplayMode,
   type ViewMode,
@@ -88,8 +94,14 @@ import {
 } from './components/ContextMenu'
 import { PromptModal } from './components/PromptModal'
 import { t, useI18n } from './i18n/locale'
-import { setActiveSubEditor, subscribeSubEditorState } from './editor/active-editor'
+import {
+  getActiveSubEditor,
+  setActiveSubEditor,
+  subscribeSubEditorState,
+} from './editor/active-editor'
 import type { CompareEntry } from './editor/compare'
+import { collectHeadings } from './editor/headings'
+import { setSelectionAlign } from './editor/direction'
 
 import {
   editorExtensions,
@@ -101,7 +113,8 @@ import { InkOverlay } from './components/InkOverlay'
 import { collectRevisions, gotoRevision, type TrackChangesStorage } from './editor/revisions'
 import { NavPane } from './components/NavPane'
 import { Ruler } from './components/Ruler'
-import { docLineFactor, docStyleCss, docThemeCss } from './doc-style-css'
+import { docLineFactor, docThemeCss } from './doc-style-css'
+import { isDocDirty } from './doc-dirty'
 import {
   EMPTY_HF_VARIANTS,
   hfFromPart,
@@ -151,6 +164,13 @@ import {
 const _IS_MAC = navigator.platform.toLowerCase().includes('mac')
 
 const twipsToPx = (twips: number) => (twips / 1440) * 96
+
+const EMPTY_BLOCKS: Block[] = []
+
+// O(doc) derivations cached by PM doc reference: caret moves and unrelated
+// state updates reuse the last result instead of re-walking the whole document
+const wordCountOfDoc = cachedByDoc((d) => countWords(d.textContent))
+const revisionCountOfDoc = cachedByDoc((d) => collectRevisions(d).length)
 
 /**
  * Document position of a measured line-start DOM anchor. posAtDOM works from the DOM
@@ -247,7 +267,7 @@ const DEFAULT_SETTINGS: AiSettings = {
 
 export function App() {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
-  useI18n()
+  const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
   /** true until the pending-open / new-blank boot checks settle; the start screen stays hidden meanwhile */
   const bootPendingRef = useRef<Promise<[OpenFileResult | null, boolean]> | null>(null)
@@ -416,7 +436,6 @@ export function App() {
   const [splitHtml, setSplitHtml] = useState('')
   const [showFind, setShowFind] = useState(false)
   const [showComments, setShowComments] = useState(false)
-  const [showStylesPanel, setShowStylesPanel] = useState(false)
   /** Style definitions pending write-back (key = styleId), saved via SaveOptions.styleUpserts */
   const [styleUpserts, setStyleUpserts] = useState<Record<string, StyleUpsert>>({})
   const [comments, setComments] = useState<CommentInfo[]>([])
@@ -458,6 +477,8 @@ export function App() {
     entries: CompareEntry[]
   } | null>(null)
   const [autoSave, setAutoSave] = useState(() => localStorage.getItem('aidocs.autoSave') === '1')
+  // tab closed but this renderer kept alive (shell freeze workaround): go inert
+  const [tornDown, setTornDown] = useState(false)
   const [aiPreset, setAiPreset] = useState<{
     text: string
     nonce: number
@@ -478,6 +499,9 @@ export function App() {
   const [showFontDialog, setShowFontDialog] = useState(false)
   const [showParaDialog, setShowParaDialog] = useState(false)
   const [pageInfo, setPageInfo] = useState({ current: 1, total: 1 })
+  // last page's displayed number for the document-end footer '#' marker
+  // (section restarts / pageNumberFmt make it differ from the physical count)
+  const [lastPageNo, setLastPageNo] = useState<number | string | null>(null)
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
   const dirtyRef = useRef(false)
   // serializes save(): overlapping saves (Cmd+S vs autosave timer vs blur) would
@@ -617,15 +641,18 @@ export function App() {
     document.title = doc ? doc.fileName : 'HermesOffice Docs'
   }, [doc])
 
+  useEffect(() => window.desktop.onTeardown?.(() => setTornDown(true)), [])
+
   // Crash-recovery copy: while the document is dirty, push a serialized
   // copy to the main process every 30s; a normal save (or discarding on close) removes
   // it, and reopening the file offers Restore/Discard when a newer copy exists.
   useEffect(() => {
+    if (tornDown) return
     const timer = window.setInterval(() => {
       void writeRecoveryCopyImpl(fileCtxRef.current)
     }, 30_000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [tornDown])
 
   // Recompute the document-level line-height factor while editing:
   // docStyleCss decides it once at parse time, so typing CJK into a blank document
@@ -1046,121 +1073,6 @@ export function App() {
     setStatus(t('appFieldsUpdated', { n: jobs.length }))
   }, [editor, fieldValue])
 
-  // ---- Styles pane: apply/update/create styles (styles.xml write-back) ----
-
-  /** Capture formatting from the current selection → StyleUpsert's rPr/pPr */
-  const captureSelectionFormat = useCallback((): Pick<StyleUpsert, 'rPr' | 'pPr'> => {
-    if (!editor) return {}
-    const text = editor.getAttributes('docTextStyle')
-    const para = editor.isActive('docHeading')
-      ? editor.getAttributes('docHeading')
-      : editor.isActive('docListItem')
-        ? editor.getAttributes('docListItem')
-        : editor.getAttributes('docParagraph')
-    const rPr: NonNullable<StyleUpsert['rPr']> = {}
-    if (editor.isActive('bold') || text.bold) rPr.bold = true
-    if (editor.isActive('italic') || text.italic) rPr.italic = true
-    if (editor.isActive('underline')) rPr.underline = true
-    if (editor.isActive('strike')) rPr.strike = true
-    if (text.color) rPr.color = String(text.color).replace('#', '')
-    if (text.sizeHalfPoints) rPr.sizeHalfPoints = Number(text.sizeHalfPoints)
-    if (text.font) rPr.font = String(text.font)
-    const pPr: NonNullable<StyleUpsert['pPr']> = {}
-    if (para.align) pPr.align = para.align as NonNullable<StyleUpsert['pPr']>['align']
-    if (para.lineSpacing) pPr.lineSpacing = Number(para.lineSpacing)
-    return {
-      ...(Object.keys(rPr).length > 0 ? { rPr } : {}),
-      ...(Object.keys(pPr).length > 0 ? { pPr } : {}),
-    }
-  }, [editor])
-
-  /** Upsert into the pending-save set + local style table / canvas CSS take effect immediately */
-  const registerStyleUpsert = useCallback(
-    (up: StyleUpsert) => {
-      setStyleUpserts((m) => ({ ...m, [up.styleId]: up }))
-      if (doc) {
-        doc.parsed.styles.set(up.styleId, {
-          styleId: up.styleId,
-          name: up.name,
-          type: up.type,
-          display: {
-            ...(up.rPr?.bold ? { bold: true } : {}),
-            ...(up.rPr?.italic ? { italic: true } : {}),
-            ...(up.rPr?.underline ? { underline: true } : {}),
-            ...(up.rPr?.strike ? { strike: true } : {}),
-            ...(up.rPr?.color ? { color: up.rPr.color } : {}),
-            ...(up.rPr?.sizeHalfPoints ? { sizeHalfPoints: up.rPr.sizeHalfPoints } : {}),
-            ...(up.rPr?.font ? { font: up.rPr.font } : {}),
-            ...(up.pPr?.lineSpacing ? { lineSpacing: up.pPr.lineSpacing } : {}),
-          },
-        })
-        setDocCss(docStyleCss(doc.parsed))
-      }
-    },
-    [doc],
-  )
-
-  const applyStyleFromPanel = useCallback(
-    (styleId: string, type: 'paragraph' | 'character') => {
-      if (!editor) return
-      if (type === 'character') {
-        editor.chain().focus().setMark('docTextStyle', { styleId }).run()
-        return
-      }
-      const heading = doc?.parsed.styles.get(styleId)?.headingLevel
-      if (heading) {
-        editor.chain().focus().setNode('docHeading', { level: heading }).run()
-      } else if (styleId === 'Normal') {
-        editor.chain().focus().setNode('docParagraph', { styleId: null }).run()
-      } else {
-        editor
-          .chain()
-          .focus()
-          .setNode('docParagraph', {})
-          .updateAttributes('docParagraph', { styleId })
-          .run()
-      }
-    },
-    [editor, doc],
-  )
-
-  const updateStyleFromSelection = useCallback(
-    (styleId: string, type: 'paragraph' | 'character', name: string) => {
-      const existing = doc?.parsed.styles.get(styleId)
-      registerStyleUpsert({
-        styleId,
-        type,
-        name,
-        ...(type === 'paragraph' && styleId !== 'Normal' ? { basedOn: 'Normal' } : {}),
-        ...(existing?.headingLevel ? {} : {}),
-        ...captureSelectionFormat(),
-      })
-      setStatus(t('appStyleUpdated', { name }))
-    },
-    [doc, registerStyleUpsert, captureSelectionFormat],
-  )
-
-  const createStyleFromSelection = useCallback(
-    (name: string, type: 'paragraph' | 'character') => {
-      if (!doc) return
-      let base = name.replace(/[^A-Za-z0-9]/g, '')
-      if (!base) base = type === 'paragraph' ? 'CustomPara' : 'CustomChar'
-      let styleId = base
-      let n = 1
-      while (doc.parsed.styles.has(styleId) || styleUpserts[styleId]) styleId = `${base}${++n}`
-      registerStyleUpsert({
-        styleId,
-        type,
-        name,
-        ...(type === 'paragraph' ? { basedOn: 'Normal' } : {}),
-        ...captureSelectionFormat(),
-      })
-      applyStyleFromPanel(styleId, type)
-      setStatus(t('appStyleCreated', { name }))
-    },
-    [doc, styleUpserts, registerStyleUpsert, captureSelectionFormat, applyStyleFromPanel],
-  )
-
   // editorRef: lets the handlePaste closure (the useEditor config exists before the instance) reach the instance
   useEffect(() => {
     editorRef.current = editor
@@ -1338,7 +1250,22 @@ export function App() {
   const submitProtectModal = useCallback(() => submitProtectModalImpl(reviewCtxRef.current), [])
   const compareWithFile = useCallback(() => compareWithFileImpl(reviewCtxRef.current), [])
 
-  const revisionCount = editor && doc ? collectRevisions(editor.state.doc).length : 0
+  const revisionCount = editor && doc ? revisionCountOfDoc(editor.state.doc) : 0
+
+  /** Uncapped width-fit ratio (%) from the scroller's measured size */
+  const rawFitWidth = useCallback(() => {
+    if (!section) return null
+    const scroller = document.querySelector('.editor-scroll')
+    if (!scroller) return null
+    return ((scroller.clientWidth - 48) / twipsToPx(section.pageWidth)) * 100
+  }, [section])
+
+  /** Last auto-fit: if current zoom still equals its value → "fit mode", re-fit on size changes */
+  const lastFitRef = useRef<{ mode: 'width' | 'page'; value: number } | null>(null)
+  const zoomLiveRef = useRef(zoom)
+  useEffect(() => {
+    zoomLiveRef.current = zoom
+  }, [zoom])
 
   /** Word's page-width / whole-page zoom: compute the actual zoom ratio from the current window size */
   const zoomFit = useCallback(
@@ -1347,14 +1274,42 @@ export function App() {
       const scroller = document.querySelector('.editor-scroll')
       if (!scroller) return
       const pad = 48
-      const next =
-        mode === 'width'
-          ? ((scroller.clientWidth - pad) / twipsToPx(section.pageWidth)) * 100
-          : ((scroller.clientHeight - pad) / twipsToPx(section.pageHeight)) * 100
-      setZoom(Math.min(200, Math.max(50, Math.round(next))))
+      const wFit = ((scroller.clientWidth - pad) / twipsToPx(section.pageWidth)) * 100
+      const hFit = ((scroller.clientHeight - pad) / twipsToPx(section.pageHeight)) * 100
+      // whole page = the entire page visible, so it must fit both dimensions;
+      // floor, not round: rounding up would push the page past the pane edge
+      const next = mode === 'width' ? wFit : Math.min(wFit, hFit)
+      const applied = Math.min(200, Math.max(50, Math.floor(next)))
+      lastFitRef.current = { mode, value: applied }
+      setZoom(applied)
     },
     [section],
   )
+
+  // On scroller size changes (window/AI-dock/nav-pane toggles): follow with a
+  // re-fit while in fit mode, and clamp any manual zoom back down to width-fit
+  // whenever the page no longer fits horizontally — the canvas must never
+  // overflow the pane on a resize (same contract as the slides stage). A manual
+  // zoom smaller than fit is left alone.
+  useEffect(() => {
+    const el = document.querySelector('.editor-scroll')
+    if (!doc || !el) return
+    const ro = new ResizeObserver(() => {
+      const raw = rawFitWidth()
+      if (raw == null) return
+      const lf = lastFitRef.current
+      if (lf != null && Math.abs(zoomLiveRef.current - lf.value) <= 0.5) {
+        zoomFit(lf.mode) // fit mode: follow the container in the user's chosen fit
+        return
+      }
+      // The overflow test uses the uncapped ratio: a manual zoom that still
+      // fits (or is smaller than fit) is the user's choice and must be kept
+      if (zoomLiveRef.current <= raw + 0.5) return
+      zoomFit('width')
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [doc, zoomFit, rawFitWidth])
 
   // page-bottom height (px) reserved for footnote references inside a block: same estimation model as the parity runner
   const footnoteExtraOf = useCallback(
@@ -1564,13 +1519,12 @@ export function App() {
     const nums = secs.length > 1 ? pageNumbers(slices, secs) : slices.map((_, i) => i + 1)
     const byEl = new Map(mBlocks.filter((b) => b.el).map((b) => [b.el as HTMLElement, b.top]))
     const pages: number[] = []
-    editor.state.doc.forEach((node, offset) => {
-      if (node.type.name !== 'docHeading' || !node.textContent.trim()) return
-      const dom = editor.view.nodeDOM(offset) as HTMLElement | null
+    for (const h of collectHeadings(editor.state.doc)) {
+      const dom = editor.view.nodeDOM(h.pos) as HTMLElement | null
       const top = dom ? byEl.get(dom) : undefined
       const idx = top === undefined ? 1 : pageAt(slices, top + 1)
       pages.push(nums[Math.min(Math.max(idx, 1), nums.length) - 1] ?? idx)
-    })
+    }
     return pages
   }, [
     editor,
@@ -1589,6 +1543,7 @@ export function App() {
   useEffect(() => {
     if (!doc || !section) {
       setPageInfo({ current: 1, total: 1 })
+      setLastPageNo(null)
       return
     }
     const scroller = document.querySelector('.editor-scroll')
@@ -1660,6 +1615,18 @@ export function App() {
       })
       const { blocks, secList, hfHs } = measured
       slices = measured.s
+      // document-end footer shows the last page's displayed number, not the physical count
+      if (slices.length > 0) {
+        const lastIdx = slices.length - 1
+        setLastPageNo(
+          secList
+            ? formatPageNumber(
+                pageNumbers(slices, secList)[lastIdx],
+                secList[Math.min(slices[lastIdx].section, secList.length - 1)]?.pageNumberFmt,
+              )
+            : slices.length,
+        )
+      }
       // M4 always-on pagination in the canvas: render page gaps before page-leading blocks
       // (print view only; gaps don't count as content — measureBlocks subtracts them, so
       // slice results are gap-independent and refresh is idempotent)
@@ -1669,6 +1636,56 @@ export function App() {
         if (viewMode === 'print' && !readMode) {
           const pmRect = pm.getBoundingClientRect()
           const pageNotes = pageFootnotesOf(blocks, slices)
+          // per-page header/footer for the gaps (previous page's footer + next page's
+          // header), variant-selected like the pagination preview (first page / odd-even /
+          // per-section references), with real page numbers for the '#' marker
+          const nums = secList ? pageNumbers(slices, secList) : slices.map((_, n) => n + 1)
+          const firsts = sectionFirstPages(slices)
+          const effRefs = secList ? effectiveHfRefs(secList) : null
+          const parsed = doc.parsed
+          const pageHfOf = (
+            pageIdx: number,
+            kind: 'header' | 'footer',
+          ): { value: HeaderFooter | null; images?: HfImage[] } => {
+            const pageNo = nums[pageIdx]
+            if (!secList || secList.length <= 1) {
+              if (titlePg && pageIdx === 0) {
+                return kind === 'header'
+                  ? { value: hfVariants.headerFirst, images: parsed.headerFirst?.images }
+                  : { value: hfVariants.footerFirst, images: parsed.footerFirst?.images }
+              }
+              if (evenOddHf && pageNo % 2 === 0) {
+                return kind === 'header'
+                  ? { value: hfVariants.headerEven, images: parsed.headerEven?.images }
+                  : { value: hfVariants.footerEven, images: parsed.footerEven?.images }
+              }
+              return kind === 'header'
+                ? { value: header, images: parsed.headerImages ?? undefined }
+                : { value: footer, images: parsed.footerImages ?? undefined }
+            }
+            const pageSlice = slices[pageIdx]
+            const sec = secList[Math.min(pageSlice.section, secList.length - 1)]
+            const refs = effRefs![Math.min(pageSlice.section, effRefs!.length - 1)]
+            const variant =
+              sec.titlePg && firsts[pageIdx]
+                ? 'first'
+                : evenOddHf && pageNo % 2 === 0
+                  ? 'even'
+                  : 'default'
+            const ov = variant === 'default' ? sectionHfOverride(pageSlice.section, kind) : null
+            const rId = refs[kind][variant]
+            return {
+              value: ov ?? hfFromPart(rId ? parsed.hfParts?.[rId] : null),
+              images: rId ? parsed.hfParts?.[rId]?.images : undefined,
+            }
+          }
+          const pageNoTextOf = (pageIdx: number) =>
+            formatPageNumber(
+              nums[pageIdx],
+              secList?.[Math.min(slices[pageIdx].section, secList.length - 1)]?.pageNumberFmt,
+            )
+          const hfSig = (v: HeaderFooter | null | undefined) =>
+            v ? `${v.text}·${v.pageNumber ? 1 : 0}·${v.paras?.length ?? 0}` : ''
           slices.slice(1).forEach((slice, k) => {
             // an even/odd section's zero-height blank page shares its start with the following page: draw only one gap band on the canvas
             if (slice.start === slices[k].start) return
@@ -1684,6 +1701,48 @@ export function App() {
               marginLeft: twipsToPx(nextSec.marginLeft),
               marginRight: twipsToPx(nextSec.marginRight),
             }
+            // previous page's footer (bottom-margin band) + next page's header (top-margin
+            // band), so the canvas shows headers/footers on every page like Word
+            const gapFooter = pageHfOf(k, 'footer')
+            const gapHeader = pageHfOf(k + 1, 'header')
+            const hfEls: HTMLElement[] = []
+            if (hfHasVisibleContent(gapFooter.value, gapFooter.images)) {
+              const box = sectionPageBox(prevSec)
+              const el = makeGapHfEl({
+                kind: 'footer',
+                value: gapFooter.value ?? { text: '' },
+                images: gapFooter.images,
+                pageNo: pageNoTextOf(k),
+                pageTotal: slices.length,
+              })
+              el.style.top = 'auto'
+              el.style.bottom = `${GAP_BAND + metrics.marginTop + box.footerDist}px`
+              el.style.width = `${box.width - 120}px`
+              hfEls.push(el)
+            }
+            if (hfHasVisibleContent(gapHeader.value, gapHeader.images)) {
+              const box = sectionPageBox(nextSec)
+              const el = makeGapHfEl({
+                kind: 'header',
+                value: gapHeader.value ?? { text: '' },
+                images: gapHeader.images,
+                pageNo: pageNoTextOf(k + 1),
+                pageTotal: slices.length,
+              })
+              el.style.bottom = 'auto'
+              el.style.top = `calc(100% - ${Math.max(0, metrics.marginTop - box.headerDist)}px)`
+              el.style.width = `${box.width - 120}px`
+              hfEls.push(el)
+            }
+            const hfProps =
+              hfEls.length > 0
+                ? {
+                    hfEls,
+                    // key must cover everything baked into the widgets (both pages'
+                    // formatted numbers + total count), or stale PAGE/NUMPAGES survive reuse
+                    hfKey: `${pageNoTextOf(k)}·${pageNoTextOf(k + 1)}·${slices.length}·${hfSig(gapFooter.value)}·${hfSig(gapHeader.value)}`,
+                  }
+                : {}
             // previous page's footnotes: rendered into the top of the gap (page-bottom area), with the gap enlarged by the reserved height.
             // in-table gaps carry no footnote area (absolute positioning inside a table-row is unreliable); footnotes stay in the end-of-document list
             const items = pageNotes[k] ?? []
@@ -1708,6 +1767,7 @@ export function App() {
                 el: blocks[i].el!,
                 metrics: notesMetrics,
                 ...(notes ? { notes, notesKey } : {}),
+                ...hfProps,
               })
               markShown()
               return
@@ -1770,6 +1830,7 @@ export function App() {
                 marginRight: metrics.marginRight + (pmRect.right - elRect.right) / factor,
               },
               ...(notes ? { notes, notesKey } : {}),
+              ...hfProps,
             })
             markShown()
           })
@@ -1836,6 +1897,12 @@ export function App() {
     hfHeightsOf,
     measureSingleFlow,
     colGeomsFor,
+    header,
+    footer,
+    hfVariants,
+    titlePg,
+    evenOddHf,
+    sectionHfOverride,
   ])
 
   // section at the cursor: the target the Layout tab acts on
@@ -1904,30 +1971,7 @@ export function App() {
   // "has unsaved changes" check shared by the close guard and autosave; refreshed on every
   // render (all edit paths forceRender), so the guard's query reads the latest value
   const anyDirtyRef = useRef(false)
-  const hasUnsavedChanges =
-    dirtyRef.current ||
-    sectionDirty ||
-    sectionsDirty.length > 0 ||
-    trailingStartType !== null ||
-    pageColorDirty ||
-    headerDirty ||
-    footerDirty ||
-    hfVariantsDirty.length > 0 ||
-    Object.keys(sectionHfEdits).length > 0 ||
-    pgNumEdit !== null ||
-    pgNumDirtySections.length > 0 ||
-    numberingDirty ||
-    Object.keys(styleUpserts).length > 0 ||
-    titlePgDirty ||
-    evenOddHfDirty ||
-    watermarkDirty ||
-    inksDirty ||
-    notesDirty ||
-    sourcesDirty ||
-    themeFontsDirty ||
-    themeColorsDirty ||
-    commentsDirty ||
-    protectionDirty
+  const hasUnsavedChanges = isDocDirty(fileCtxRef.current)
   anyDirtyRef.current = hasUnsavedChanges
 
   // close guard: the main process queries dirty state before closing a tab/window; choosing "Save" runs a full save and reports back
@@ -1942,10 +1986,13 @@ export function App() {
     const offSave = window.desktop.onCloseSaveRequest?.(() => {
       // Closing must not report success while edits are still unpersisted, so a
       // save that raced with typing is retried until the file catches up.
+      // save(false) never prompts — a pathless first save lands silently in the
+      // default folder — so retrying is always safe; reporting "persisted" just
+      // because the snapshot had no path yet would close over mid-save edits.
       void saveUntilPersisted({
         save: () => save(false),
         wasIncomplete: () => saveIncompleteRef.current,
-        hasPath: () => !!doc?.filePath,
+        hasPath: () => true,
       }).then(
         (ok) => window.desktop.reportCloseSaveResult(ok === true),
         () => window.desktop.reportCloseSaveResult(false),
@@ -1959,31 +2006,9 @@ export function App() {
 
   // autosave: every 30s and on window blur, silently persist pending changes
   useEffect(() => {
-    if (!autoSave || !doc || !doc.filePath) return
+    if (tornDown || !autoSave || !doc || !doc.filePath) return
     const tick = () => {
-      const anyDirty =
-        dirtyRef.current ||
-        sectionDirty ||
-        sectionsDirty.length > 0 ||
-        trailingStartType !== null ||
-        pageColorDirty ||
-        headerDirty ||
-        footerDirty ||
-        hfVariantsDirty.length > 0 ||
-        Object.keys(sectionHfEdits).length > 0 ||
-        pgNumEdit !== null ||
-        pgNumDirtySections.length > 0 ||
-        numberingDirty ||
-        Object.keys(styleUpserts).length > 0 ||
-        titlePgDirty ||
-        evenOddHfDirty ||
-        watermarkDirty ||
-        inksDirty ||
-        notesDirty ||
-        sourcesDirty ||
-        themeFontsDirty ||
-        themeColorsDirty
-      if (!anyDirty) return
+      if (!isDocDirty(fileCtxRef.current)) return
       if (editor?.view.composing) return // don't interrupt IME input
       const active = document.activeElement as HTMLElement | null
       if (active?.closest('td[contenteditable], .doc-textbox')) return // mid in-place edit
@@ -1995,30 +2020,7 @@ export function App() {
       window.clearInterval(id)
       window.removeEventListener('blur', tick)
     }
-  }, [
-    autoSave,
-    doc,
-    editor,
-    save,
-    sectionDirty,
-    pageColorDirty,
-    headerDirty,
-    footerDirty,
-    hfVariantsDirty,
-    sectionHfEdits,
-    pgNumEdit,
-    pgNumDirtySections,
-    numberingDirty,
-    styleUpserts,
-    titlePgDirty,
-    evenOddHfDirty,
-    watermarkDirty,
-    inksDirty,
-    notesDirty,
-    sourcesDirty,
-    themeFontsDirty,
-    themeColorsDirty,
-  ])
+  }, [tornDown, autoSave, doc, editor, save])
 
   // After an AI run finishes on a never-saved document, silently save it once: the
   // first save derives the file name from the first heading (see deriveAutoFileName
@@ -2036,7 +2038,16 @@ export function App() {
   }, [editor, save])
 
   useEffect(() => {
+    // editing shortcuts only fire when focus is in an editor surface (main
+    // ProseMirror, textbox sub-editor, in-place table cell) or nowhere at all —
+    // never while typing in the find box, AI input or other form fields
+    const focusInEditor = () => {
+      const el = document.activeElement
+      if (!el || el === document.body) return true
+      return !!(el as HTMLElement).closest('.ProseMirror, td[contenteditable]')
+    }
     const handler = (e: KeyboardEvent) => {
+      const canEdit = !!editor?.isEditable && focusInEditor()
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault()
         void save(e.shiftKey)
@@ -2050,39 +2061,41 @@ export function App() {
         if (doc) setShowFind(true)
       }
       // Word dialog shortcuts: Font ⌘D / Paragraph ⌥⌘M / Hyperlink ⌘K
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === 'd' && doc) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === 'd' && doc && canEdit) {
         e.preventDefault()
         setShowFontDialog(true)
       }
-      if ((e.metaKey || e.ctrlKey) && e.altKey && e.code === 'KeyM' && doc) {
+      if ((e.metaKey || e.ctrlKey) && e.altKey && e.code === 'KeyM' && doc && canEdit) {
         e.preventDefault()
         setShowParaDialog(true)
       }
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === 'k' && doc) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === 'k' && doc && canEdit) {
         e.preventDefault()
         setShowLinkModal(true)
       }
-      if (e.key === 'F9' && doc) {
+      if (e.key === 'F9' && doc && editor?.isEditable) {
         e.preventDefault()
         updateFields()
       }
       // Word alignment shortcuts
-      const ALIGN_KEYS: Record<string, string | null> = {
-        l: null,
+      const ALIGN_KEYS: Record<string, 'left' | 'center' | 'right' | 'justify'> = {
+        l: 'left',
         e: 'center',
         r: 'right',
         j: 'justify',
       }
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key in ALIGN_KEYS && editor) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key in ALIGN_KEYS &&
+        editor &&
+        canEdit
+      ) {
         e.preventDefault()
-        const align = ALIGN_KEYS[e.key]
-        editor
-          .chain()
-          .focus()
-          .updateAttributes('docParagraph', { align })
-          .updateAttributes('docHeading', { align })
-          .updateAttributes('docListItem', { align })
-          .run()
+        // route into a focused textbox sub-editor, like the ribbon does
+        const target = getActiveSubEditor() ?? editor
+        setSelectionAlign(target, ALIGN_KEYS[e.key])
       }
     }
     window.addEventListener('keydown', handler)
@@ -2103,7 +2116,8 @@ export function App() {
   // native application menu → renderer commands
   useEffect(() => {
     return window.desktop.onMenuCommand((command, payload) => {
-      const align = (value: string | null) => editor && setParaAttrs(editor, { align: value })
+      const align = (value: 'left' | 'center' | 'right' | 'justify') =>
+        editor && setSelectionAlign(editor, value)
       switch (command) {
         case 'new':
           void newFile()
@@ -2188,7 +2202,7 @@ export function App() {
           editor?.chain().focus().toggleMark('underline').run()
           break
         case 'align-left':
-          align(null)
+          align('left')
           break
         case 'align-center':
           align('center')
@@ -2292,9 +2306,166 @@ export function App() {
     }
   }, [editor, openRecent, save, status, exportPdf])
 
+  // shallow-stable snapshot of every editor read the ribbon displays: caret moves
+  // that change none of it keep the reference, so the memoized Ribbon skips
+  const formatState = useShallowStable(
+    computeFormatState(editor, doc?.parsed.styles, doc?.parsed.docDefaults),
+  )
+
+  const ribbonStyles = useMemo(() => (doc ? new Map(doc.parsed.styles) : undefined), [doc])
+
+  /** every function prop of the memoized Ribbon, with stable identities (dispatches into the latest render's closures) */
+  const ribbonActions = useStableCallbacks({
+    allocateNumId: (kind: 'bullet' | 'ordered') => allocateListNumId(kind),
+    createListDef: (levels: CustomNumberingLevel[]) => createCustomListDef(levels),
+    onParagraphDialog: () => setShowParaDialog(true),
+    onOpen: () => void openFile(),
+    onSave: () => void save(false),
+    onSaveAs: () => void save(true),
+    onToggleAi: () => setShowAi((v) => !v),
+    onSection: (next: SectionSettings) => {
+      // layout applies to the cursor's section; the final section's sectPr goes through SaveOptions.section (also drives canvas geometry)
+      setSections((prev) =>
+        prev.map((s, i) => (i === activeSection ? { ...s, settings: next } : s)),
+      )
+      if (sections.length <= 1 || activeSection === sections.length - 1) {
+        setSection(next)
+        setSectionDirty(true)
+      } else {
+        setSectionsDirty((d) => (d.includes(activeSection) ? d : [...d, activeSection]))
+        setStatus(t('appSectionSettingsApplied', { n: activeSection + 1 }))
+      }
+    },
+    onInsertSectionBreak: (type: 'nextPage' | 'continuous' | 'evenPage' | 'oddPage') =>
+      insertSectionBreak(type),
+    onPageColor: (next: string | null) => {
+      setPageColor(next)
+      setPageColorDirty(true)
+    },
+    onWatermark: (next: string | null) => {
+      setWatermark(next)
+      setWatermarkDirty(true)
+      setStatus(next ? t('appWatermarkSet', { text: next }) : t('appWatermarkRemoved'))
+    },
+    onThemeFonts: (fonts: ThemeFonts) => {
+      setThemeFonts(fonts)
+      setThemeFontsDirty(true)
+      setStatus(t('appThemeFontsChanged'))
+    },
+    onThemeColors: (colors: ThemeColors) => {
+      setThemeColors(colors)
+      setThemeColorsDirty(true)
+      setStatus(t('appThemeColorsApplied', { name: colors.name ?? '' }))
+    },
+    onInkTool: setInkTool,
+    onInkPen: setInkPen,
+    onInkHighlighter: setInkHighlighter,
+    onInkClearAll: clearInks,
+    onInsertNote: insertNote,
+    onAddSource: (source: SourceInfo) => {
+      setSources((prev) => [...prev, source])
+      setSourcesDirty(true)
+      setStatus(t('appSourceAdded', { title: source.title }))
+    },
+    headingPages,
+    onZoom: setZoom,
+    onZoomFit: zoomFit,
+    onDarkCanvas: setDarkCanvas,
+    onAiPreset: (text: string) => {
+      // Word's Editor / Translate start working as soon as they're clicked
+      setShowAi(true)
+      setAiPreset({ text, nonce: Date.now(), autoRun: true })
+    },
+    onHeader: (next: HeaderFooter) => {
+      setHeader(next)
+      setHeaderDirty(true)
+    },
+    onPageNumFormat: openPgNumModal,
+    onInsertField: insertField,
+    onFooter: (next: HeaderFooter) => {
+      setFooter(next)
+      setFooterDirty(true)
+    },
+    onTitlePg: toggleTitlePg,
+    onEvenOddHf: (on: boolean) => {
+      setEvenOddHf(on)
+      setEvenOddHfDirty(true)
+      setHfView(on ? 'even' : 'default')
+      setStatus(on ? t('appEvenOddOn') : t('appEvenOddOff'))
+    },
+    onShowMarks: setShowMarks,
+    onShowRuler: setShowRuler,
+    onShowNav: setShowNav,
+    onShowComments: () => setShowComments(true),
+    onNewComment: startNewComment,
+    onTrackChanges: setTrackChanges,
+    onRevisionDisplay: setRevisionDisplay,
+    onAcceptRevision: (all: boolean) => handleRevision('accept', all),
+    onRejectRevision: (all: boolean) => handleRevision('reject', all),
+    onGotoRevision: (dir: 1 | -1) => {
+      if (editor) gotoRevision(editor, dir)
+    },
+    onToggleProtection: toggleProtection,
+    onCompare: () => void compareWithFile(),
+    onViewMode: setViewMode,
+    onReadMode: setReadMode,
+    onShowGrid: setShowGrid,
+    onSplitView: setSplitView,
+    onPagePreview: () => setShowPagePreview(true),
+  })
+
+  const closeCommentsPanel = useCallback(() => {
+    setShowComments(false)
+    cancelNewComment()
+  }, [cancelNewComment])
+
+  const hasDoc = !!doc
+  const quickActions = useMemo(
+    () => (
+      <>
+        <button
+          className="qa-btn"
+          title={t('appSaveShortcutTip')}
+          disabled={!hasDoc || !hasUnsavedChanges}
+          onClick={() => void save(false)}
+        >
+          <IconSave size={16} />
+        </button>
+        <button
+          className="qa-btn"
+          title={t('appUndo')}
+          disabled={!hasDoc}
+          onClick={() => editor?.chain().focus().undo().run()}
+        >
+          <IconUndo size={16} />
+        </button>
+        <button
+          className="qa-btn"
+          title={t('appRedo')}
+          disabled={!hasDoc}
+          onClick={() => editor?.chain().focus().redo().run()}
+        >
+          <IconRedo size={16} />
+        </button>
+        <label className={`autosave-toggle ${autoSave ? 'on' : ''}`} title={t('appAutoSaveTip')}>
+          <span className="autosave-knob" />
+          <span className="autosave-text">{t('appAutoSave')}</span>
+          <input
+            type="checkbox"
+            checked={autoSave}
+            onChange={(e) => setAutoSave(e.target.checked)}
+          />
+        </label>
+        <span className="qa-sep" aria-hidden="true" />
+      </>
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasDoc, hasUnsavedChanges, autoSave, editor, save, lang],
+  )
+
   if (!editor) return null
 
-  const wordCount = countWords(editor.state.doc.textContent)
+  const wordCount = wordCountOfDoc(editor.state.doc)
 
   const canvasSection = sections[activeSection]?.settings ?? section
   const canvasBox = canvasSection ? sectionPageBox(canvasSection) : null
@@ -2325,6 +2496,7 @@ export function App() {
     <div
       className={`app ${readMode ? 'read-mode' : ''}${revisionDisplay !== 'all' ? ` rev-display-${revisionDisplay}` : ''}`}
     >
+      <ToastHost />
       {docCss && <style>{docCss}</style>}
       {doc && liveDocCjk != null && (
         <style>{`.doc-page { --doc-line-factor:${docLineFactor(doc.parsed, liveDocCjk)} }`}</style>
@@ -2341,183 +2513,50 @@ export function App() {
 .editor-scroll .doc-page.measuring-columns { column-count: auto; width: ${colFlow.colWidthPx + twipsToPx(canvasSection?.marginLeft ?? section?.marginLeft ?? 0) + twipsToPx(canvasSection?.marginRight ?? section?.marginRight ?? 0)}px; }`}</style>
       )}
       <Ribbon
-        quickActions={
-          <>
-            <button
-              className="qa-btn"
-              title={t('appSaveShortcutTip')}
-              disabled={!doc || !hasUnsavedChanges}
-              onClick={() => void save(false)}
-            >
-              <IconSave size={15} />
-            </button>
-            <button
-              className="qa-btn"
-              title={t('appUndo')}
-              disabled={!doc}
-              onClick={() => editor.chain().focus().undo().run()}
-            >
-              <IconUndo size={15} />
-            </button>
-            <button
-              className="qa-btn"
-              title={t('appRedo')}
-              disabled={!doc}
-              onClick={() => editor.chain().focus().redo().run()}
-            >
-              <IconRedo size={15} />
-            </button>
-            <label
-              className={`autosave-toggle ${autoSave ? 'on' : ''}`}
-              title={t('appAutoSaveTip')}
-            >
-              <span className="autosave-knob" />
-              <span className="autosave-text">{t('appAutoSave')}</span>
-              <input
-                type="checkbox"
-                checked={autoSave}
-                onChange={(e) => setAutoSave(e.target.checked)}
-              />
-            </label>
-            <span className="qa-sep" aria-hidden="true" />
-          </>
-        }
+        quickActions={quickActions}
         editor={editor}
+        formatState={formatState}
         hasDoc={!!doc}
-        blocks={doc?.parsed.blocks ?? []}
-        allocateNumId={allocateListNumId}
-        createListDef={createCustomListDef}
-        onStylesPanel={() => setShowStylesPanel((v) => !v)}
-        onParagraphDialog={() => setShowParaDialog(true)}
-        styles={doc?.parsed.styles}
+        blocks={doc?.parsed.blocks ?? EMPTY_BLOCKS}
+        styles={ribbonStyles}
         docDefaults={doc?.parsed.docDefaults}
-        onOpen={() => void openFile()}
-        onSave={() => void save(false)}
-        onSaveAs={() => void save(true)}
         showAi={showAi}
-        onToggleAi={() => setShowAi((v) => !v)}
         section={sections[activeSection]?.settings ?? section}
         activeSection={sections.length > 1 ? activeSection : null}
-        onSection={(next) => {
-          // layout applies to the cursor's section; the final section's sectPr goes through SaveOptions.section (also drives canvas geometry)
-          setSections((prev) =>
-            prev.map((s, i) => (i === activeSection ? { ...s, settings: next } : s)),
-          )
-          if (sections.length <= 1 || activeSection === sections.length - 1) {
-            setSection(next)
-            setSectionDirty(true)
-          } else {
-            setSectionsDirty((d) => (d.includes(activeSection) ? d : [...d, activeSection]))
-            setStatus(t('appSectionSettingsApplied', { n: activeSection + 1 }))
-          }
-        }}
-        onInsertSectionBreak={insertSectionBreak}
         pageColor={pageColor}
-        onPageColor={(next) => {
-          setPageColor(next)
-          setPageColorDirty(true)
-        }}
         watermark={watermark}
-        onWatermark={(next) => {
-          setWatermark(next)
-          setWatermarkDirty(true)
-          setStatus(next ? t('appWatermarkSet', { text: next }) : t('appWatermarkRemoved'))
-        }}
         themeFonts={themeFonts}
-        onThemeFonts={(fonts) => {
-          setThemeFonts(fonts)
-          setThemeFontsDirty(true)
-          setStatus(t('appThemeFontsChanged'))
-        }}
-        onThemeColors={(colors) => {
-          setThemeColors(colors)
-          setThemeColorsDirty(true)
-          setStatus(t('appThemeColorsApplied', { name: colors.name ?? '' }))
-        }}
+        themeColors={themeColors}
         inkTool={inkTool}
-        onInkTool={setInkTool}
         inkPen={inkPen}
-        onInkPen={setInkPen}
         inkHighlighter={inkHighlighter}
-        onInkHighlighter={setInkHighlighter}
         inkCount={inkAnnotations.length}
-        onInkClearAll={clearInks}
-        onInsertNote={insertNote}
         sources={sources}
-        headingPages={headingPages}
-        onAddSource={(source) => {
-          setSources((prev) => [...prev, source])
-          setSourcesDirty(true)
-          setStatus(t('appSourceAdded', { title: source.title }))
-        }}
         zoom={Math.round(zoom)}
-        onZoom={setZoom}
-        onZoomFit={zoomFit}
         darkCanvas={darkCanvas}
-        onDarkCanvas={setDarkCanvas}
-        onAiPreset={(text) => {
-          // Word's Editor / Translate start working as soon as they're clicked
-          setShowAi(true)
-          setAiPreset({ text, nonce: Date.now(), autoRun: true })
-        }}
         tabRequest={ribbonTabRequest}
         header={header}
-        onHeader={(next) => {
-          setHeader(next)
-          setHeaderDirty(true)
-        }}
-        onPageNumFormat={openPgNumModal}
-        onInsertField={insertField}
         footer={footer}
-        onFooter={(next) => {
-          setFooter(next)
-          setFooterDirty(true)
-        }}
         titlePg={titlePg}
-        onTitlePg={toggleTitlePg}
         evenOddHf={evenOddHf}
-        onEvenOddHf={(on) => {
-          setEvenOddHf(on)
-          setEvenOddHfDirty(true)
-          setHfView(on ? 'even' : 'default')
-          setStatus(on ? t('appEvenOddOn') : t('appEvenOddOff'))
-        }}
         showMarks={showMarks}
-        onShowMarks={setShowMarks}
         showRuler={showRuler}
-        onShowRuler={setShowRuler}
         showNav={showNav}
-        onShowNav={setShowNav}
         commentCount={comments.length}
-        onShowComments={() => setShowComments(true)}
-        canComment={!!editor && !editor.state.selection.empty}
-        onNewComment={startNewComment}
+        canComment={!editor.state.selection.empty}
         trackChanges={trackChanges}
-        onTrackChanges={setTrackChanges}
         revisionDisplay={revisionDisplay}
-        onRevisionDisplay={setRevisionDisplay}
         revisionCount={revisionCount}
-        onAcceptRevision={(all) => handleRevision('accept', all)}
-        onRejectRevision={(all) => handleRevision('reject', all)}
-        onGotoRevision={(dir) => {
-          if (editor) gotoRevision(editor, dir)
-        }}
         isProtected={isProtected}
-        onToggleProtection={toggleProtection}
-        onCompare={() => void compareWithFile()}
         filePath={doc?.filePath ?? null}
         viewMode={viewMode}
-        onViewMode={setViewMode}
         readMode={readMode}
-        onReadMode={setReadMode}
         showGrid={showGrid}
-        onShowGrid={setShowGrid}
         splitView={splitView}
-        onSplitView={setSplitView}
-        onPagePreview={() => setShowPagePreview(true)}
+        {...ribbonActions}
       />
 
-      <div className={`workspace ${darkCanvas ? 'workspace-dark' : ''}`}>
+      <div className="app-main">
         {doc && (
           <div className={`ai-dock${showAi ? '' : ' collapsed'}`}>
             {/* always mounted: collapse must not drop state or in-flight runs */}
@@ -2538,298 +2577,287 @@ export function App() {
             />
           </div>
         )}
-        {doc && showFind && <FindPanel editor={editor} onClose={() => setShowFind(false)} />}
-        {doc && showNav && <NavPane editor={editor} />}
-        <div className="editor-area">
-          <main className="editor-scroll">
-            {doc ? (
-              <div
-                className={docZoomClass}
-                onClick={onDocClick}
-                onContextMenu={onDocContextMenu}
-                style={docZoomStyle}
-              >
-                {showRuler && section && (
-                  <Ruler
-                    section={section}
-                    editor={editor}
-                    onTabStopsChange={(stops) => {
-                      if (!editor) return
-                      editor
-                        .chain()
-                        .focus()
-                        .updateAttributes('docParagraph', {
-                          tabStops: stops ? JSON.stringify(stops) : null,
-                        })
-                        .updateAttributes('docHeading', {
-                          tabStops: stops ? JSON.stringify(stops) : null,
-                        })
-                        .updateAttributes('docListItem', {
-                          tabStops: stops ? JSON.stringify(stops) : null,
-                        })
-                        .run()
-                    }}
-                  />
-                )}
-                <div className={`page-wrap ${section?.pageBorder ? 'page-bordered' : ''}`}>
-                  {watermark && (
-                    <div className="page-watermark" aria-hidden="true">
-                      {watermark}
-                    </div>
-                  )}
-                  {!readMode && (
-                    <div
-                      className={`hf-variant-chips${titlePg || evenOddHf ? '' : ' hf-chips-idle'}`}
-                    >
-                      {/* Always-available entry point: the ribbon checkbox alone was
+        <div className="app-content">
+          <div className={`workspace ${darkCanvas ? 'workspace-dark' : ''}`}>
+            {doc && showFind && <FindPanel editor={editor} onClose={() => setShowFind(false)} />}
+            {doc && showNav && <NavPane editor={editor} doc={editor.state.doc} />}
+            <div className="editor-area">
+              <main className="editor-scroll">
+                {doc ? (
+                  <div
+                    className={docZoomClass}
+                    onClick={onDocClick}
+                    onContextMenu={onDocContextMenu}
+                    style={docZoomStyle}
+                  >
+                    {showRuler && section && (
+                      <Ruler
+                        section={section}
+                        editor={editor}
+                        onTabStopsChange={(stops) => {
+                          if (!editor) return
+                          editor
+                            .chain()
+                            .focus()
+                            .updateAttributes('docParagraph', {
+                              tabStops: stops ? JSON.stringify(stops) : null,
+                            })
+                            .updateAttributes('docHeading', {
+                              tabStops: stops ? JSON.stringify(stops) : null,
+                            })
+                            .updateAttributes('docListItem', {
+                              tabStops: stops ? JSON.stringify(stops) : null,
+                            })
+                            .run()
+                        }}
+                      />
+                    )}
+                    <div className={`page-wrap ${section?.pageBorder ? 'page-bordered' : ''}`}>
+                      {watermark && (
+                        <div className="page-watermark" aria-hidden="true">
+                          {watermark}
+                        </div>
+                      )}
+                      {!readMode && (
+                        <div
+                          className={`hf-variant-chips${titlePg || evenOddHf ? '' : ' hf-chips-idle'}`}
+                        >
+                          {/* Always-available entry point: the ribbon checkbox alone was
                           undiscoverable while editing the header, so the toggle also lives here
                           (revealed on header hover until enabled) */}
-                      <button
-                        className={`hf-first-toggle${titlePg ? ' on' : ''}`}
-                        title={t('ribbonDiffFirstPageTip')}
-                        onClick={() => toggleTitlePg(!titlePg)}
-                      >
-                        {titlePg ? '✓ ' : ''}
-                        {t('ribbonDiffFirstPage')}
-                      </button>
-                      {titlePg && (
-                        <button
-                          className={effHfView === 'first' ? 'on' : ''}
-                          onClick={() => setHfView('first')}
-                        >
-                          {t('appFirstPage')}
-                        </button>
-                      )}
-                      {(titlePg || evenOddHf) && (
-                        <button
-                          className={effHfView === 'default' ? 'on' : ''}
-                          onClick={() => setHfView('default')}
-                        >
-                          {evenOddHf ? t('appOddPage') : t('appDefaultPage')}
-                        </button>
-                      )}
-                      {evenOddHf && (
-                        <button
-                          className={effHfView === 'even' ? 'on' : ''}
-                          onClick={() => setHfView('even')}
-                        >
-                          {t('appEvenPage')}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {(multiHf ||
-                    effHfView !== 'default' ||
-                    shownHeader?.text ||
-                    shownHeader?.paras?.length ||
-                    hfImagesOf('header')?.length) && (
-                    <HeaderFooterArea
-                      kind="header"
-                      value={shownHeader ?? { text: '' }}
-                      images={hfImagesOf('header')}
-                      readOnly={isProtected || readMode}
-                      onCommit={(next) => commitHf('header', next)}
-                      pageTotal={pageInfo.total}
-                    />
-                  )}
-                  <EditorContent editor={editor} />
-                  {footnotes.some((n) => !gapNoteIds.has(n.id)) && (
-                    <div className="page-notes">
-                      {/* footnotes already shown per page in page gaps aren't repeated at the end (last page's footnotes still live here) */}
-                      {footnotes
-                        .filter((n) => !gapNoteIds.has(n.id))
-                        .map((n) => (
-                          <div key={`f${n.id}`} className="page-note">
-                            <sup>{footnotes.indexOf(n) + 1}</sup>
-                            <span className="page-note-text">{n.text}</span>
-                            <button
-                              className="page-note-btn"
-                              title={t('appEditFootnote')}
-                              onClick={() => editNote('footnote', n.id)}
-                            >
-                              ✎
-                            </button>
-                            <button
-                              className="page-note-btn"
-                              title={t('appDeleteFootnote')}
-                              onClick={() => deleteNote('footnote', n.id)}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                  {endnotes.length > 0 && (
-                    // endnotes live in their own document-end area, roman-numbered — never mixed into the footnote block
-                    <div className="page-notes page-endnotes">
-                      <div className="page-notes-label">{t('appEndnotesLabel')}</div>
-                      {endnotes.map((n, i) => (
-                        <div key={`e${n.id}`} className="page-note">
-                          <sup>{toRoman(i + 1)}</sup>
-                          <span className="page-note-text">{n.text}</span>
                           <button
-                            className="page-note-btn"
-                            title={t('appEditEndnote')}
-                            onClick={() => editNote('endnote', n.id)}
+                            className={`hf-first-toggle${titlePg ? ' on' : ''}`}
+                            title={t('ribbonDiffFirstPageTip')}
+                            onClick={() => toggleTitlePg(!titlePg)}
                           >
-                            ✎
+                            {titlePg ? '✓ ' : ''}
+                            {t('ribbonDiffFirstPage')}
                           </button>
-                          <button
-                            className="page-note-btn"
-                            title={t('appDeleteEndnote')}
-                            onClick={() => deleteNote('endnote', n.id)}
-                          >
-                            ×
-                          </button>
+                          {titlePg && (
+                            <button
+                              className={effHfView === 'first' ? 'on' : ''}
+                              onClick={() => setHfView('first')}
+                            >
+                              {t('appFirstPage')}
+                            </button>
+                          )}
+                          {(titlePg || evenOddHf) && (
+                            <button
+                              className={effHfView === 'default' ? 'on' : ''}
+                              onClick={() => setHfView('default')}
+                            >
+                              {evenOddHf ? t('appOddPage') : t('appDefaultPage')}
+                            </button>
+                          )}
+                          {evenOddHf && (
+                            <button
+                              className={effHfView === 'even' ? 'on' : ''}
+                              onClick={() => setHfView('even')}
+                            >
+                              {t('appEvenPage')}
+                            </button>
+                          )}
                         </div>
-                      ))}
+                      )}
+                      {(multiHf ||
+                        effHfView !== 'default' ||
+                        shownHeader?.text ||
+                        shownHeader?.paras?.length ||
+                        hfImagesOf('header')?.length) && (
+                        <HeaderFooterArea
+                          kind="header"
+                          value={shownHeader ?? { text: '' }}
+                          images={hfImagesOf('header')}
+                          readOnly={isProtected || readMode}
+                          onCommit={(next) => commitHf('header', next)}
+                          pageTotal={pageInfo.total}
+                        />
+                      )}
+                      <EditorContent editor={editor} />
+                      {footnotes.some((n) => !gapNoteIds.has(n.id)) && (
+                        <div className="page-notes">
+                          {/* footnotes already shown per page in page gaps aren't repeated at the end (last page's footnotes still live here) */}
+                          {footnotes
+                            .filter((n) => !gapNoteIds.has(n.id))
+                            .map((n) => (
+                              <div key={`f${n.id}`} className="page-note">
+                                <sup>{footnotes.indexOf(n) + 1}</sup>
+                                <span className="page-note-text">{n.text}</span>
+                                <button
+                                  className="page-note-btn"
+                                  title={t('appEditFootnote')}
+                                  onClick={() => editNote('footnote', n.id)}
+                                >
+                                  ✎
+                                </button>
+                                <button
+                                  className="page-note-btn"
+                                  title={t('appDeleteFootnote')}
+                                  onClick={() => deleteNote('footnote', n.id)}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                      {endnotes.length > 0 && (
+                        // endnotes live in their own document-end area, roman-numbered — never mixed into the footnote block
+                        <div className="page-notes page-endnotes">
+                          <div className="page-notes-label">{t('appEndnotesLabel')}</div>
+                          {endnotes.map((n, i) => (
+                            <div key={`e${n.id}`} className="page-note">
+                              <sup>{toRoman(i + 1)}</sup>
+                              <span className="page-note-text">{n.text}</span>
+                              <button
+                                className="page-note-btn"
+                                title={t('appEditEndnote')}
+                                onClick={() => editNote('endnote', n.id)}
+                              >
+                                ✎
+                              </button>
+                              <button
+                                className="page-note-btn"
+                                title={t('appDeleteEndnote')}
+                                onClick={() => deleteNote('endnote', n.id)}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {(multiHf ||
+                        effHfView !== 'default' ||
+                        shownFooter?.text ||
+                        shownFooter?.pageNumber ||
+                        shownFooter?.paras?.length ||
+                        hfImagesOf('footer')?.length) && (
+                        <HeaderFooterArea
+                          kind="footer"
+                          value={shownFooter ?? { text: '' }}
+                          images={hfImagesOf('footer')}
+                          readOnly={isProtected || readMode}
+                          onCommit={(next) => commitHf('footer', next)}
+                          pageNo={lastPageNo ?? pageInfo.total}
+                          pageTotal={pageInfo.total}
+                        />
+                      )}
+                      {(inkAnnotations.length > 0 || inkTool !== 'select') && !readMode && (
+                        <InkOverlay
+                          tool={isProtected ? 'select' : inkTool}
+                          color={inkTool === 'highlighter' ? inkHighlighter.color : inkPen.color}
+                          width={inkTool === 'highlighter' ? inkHighlighter.width : inkPen.width}
+                          zoom={zoom}
+                          annotations={inkAnnotations}
+                          onAdd={addInk}
+                          onRemove={removeInks}
+                        />
+                      )}
                     </div>
-                  )}
-                  {(multiHf ||
-                    effHfView !== 'default' ||
-                    shownFooter?.text ||
-                    shownFooter?.pageNumber ||
-                    shownFooter?.paras?.length ||
-                    hfImagesOf('footer')?.length) && (
-                    <HeaderFooterArea
-                      kind="footer"
-                      value={shownFooter ?? { text: '' }}
-                      images={hfImagesOf('footer')}
-                      readOnly={isProtected || readMode}
-                      onCommit={(next) => commitHf('footer', next)}
-                      pageTotal={pageInfo.total}
-                    />
-                  )}
-                  {(inkAnnotations.length > 0 || inkTool !== 'select') && !readMode && (
-                    <InkOverlay
-                      tool={isProtected ? 'select' : inkTool}
-                      color={inkTool === 'highlighter' ? inkHighlighter.color : inkPen.color}
-                      width={inkTool === 'highlighter' ? inkHighlighter.width : inkPen.width}
-                      zoom={zoom}
-                      annotations={inkAnnotations}
-                      onAdd={addInk}
-                      onRemove={removeInks}
-                    />
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="start-screen start-booting">{t('appStartOpening')}</div>
-            )}
-          </main>
-          {doc && splitView && (
-            <div className="split-pane">
-              <div className="split-pane-bar">
-                <span>{t('appSplitPaneLabel')}</span>
-                <button
-                  className="split-pane-close"
-                  title={t('appRemoveSplit')}
-                  onClick={() => setSplitView(false)}
-                >
-                  ×
-                </button>
-              </div>
-              <div className="split-pane-scroll">
-                <div className={docZoomClass} style={docZoomStyle}>
-                  <div className="page-wrap">
-                    <div
-                      className="doc-page ProseMirror split-doc"
-                      dangerouslySetInnerHTML={{ __html: splitHtml }}
-                    />
+                  </div>
+                ) : (
+                  <div className="start-screen start-booting">{t('appStartOpening')}</div>
+                )}
+              </main>
+              {doc && splitView && (
+                <div className="split-pane">
+                  <div className="split-pane-bar">
+                    <span>{t('appSplitPaneLabel')}</span>
+                    <button
+                      className="split-pane-close"
+                      title={t('appRemoveSplit')}
+                      onClick={() => setSplitView(false)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="split-pane-scroll">
+                    <div className={docZoomClass} style={docZoomStyle}>
+                      <div className="page-wrap">
+                        <div
+                          className="doc-page ProseMirror split-doc"
+                          dangerouslySetInnerHTML={{ __html: splitHtml }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
-          )}
-        </div>
-        {readMode && (
-          <button className="read-exit" onClick={() => setReadMode(false)}>
-            {t('appExitReadMode')}
-          </button>
-        )}
-        {doc && showComments && (
-          <CommentsPanel
-            comments={comments}
-            composing={commentComposing}
-            onSubmitNew={submitNewComment}
-            onReply={replyToComment}
-            onResolve={resolveComment}
-            onCancelNew={cancelNewComment}
-            onDelete={deleteComment}
-            onClose={() => {
-              setShowComments(false)
-              cancelNewComment()
-            }}
-          />
-        )}
-        {doc && showStylesPanel && (
-          <StylesPanel
-            styles={doc.parsed.styles}
-            activeParaStyleId={
-              editor.isActive('docHeading')
-                ? `Heading${editor.getAttributes('docHeading').level ?? 1}`
-                : ((editor.getAttributes('docParagraph').styleId as string | null) ?? 'Normal')
-            }
-            onApply={applyStyleFromPanel}
-            onUpdateFromSelection={updateStyleFromSelection}
-            onCreateFromSelection={createStyleFromSelection}
-            onClose={() => setShowStylesPanel(false)}
-          />
-        )}
-        {doc && compareResult && (
-          <ComparePanel
-            otherName={compareResult.otherName}
-            entries={compareResult.entries}
-            onClose={() => setCompareResult(null)}
-          />
-        )}
-      </div>
-
-      <footer className="status-bar">
-        <div className="status-left">
-          {doc && (
-            <>
-              <span className="status-item">
-                {t('appPageOf', { current: pageInfo.current, total: pageInfo.total })}
-              </span>
-              <button
-                className="status-item status-wordcount"
-                title={t('appWordCountTitle')}
-                onClick={openStats}
-              >
-                {t('appWordCountN', { n: wordCount })}
+            {readMode && (
+              <button className="read-exit" onClick={() => setReadMode(false)}>
+                {t('appExitReadMode')}
               </button>
-            </>
-          )}
-          {!doc && t('appReady')}
-          {status && <span className="status-msg"> — {status}</span>}
+            )}
+            {doc && showComments && (
+              <CommentsPanel
+                comments={comments}
+                docNode={editor.state.doc}
+                composing={commentComposing}
+                onSubmitNew={submitNewComment}
+                onReply={replyToComment}
+                onResolve={resolveComment}
+                onCancelNew={cancelNewComment}
+                onDelete={deleteComment}
+                onClose={closeCommentsPanel}
+              />
+            )}
+            {doc && compareResult && (
+              <ComparePanel
+                otherName={compareResult.otherName}
+                entries={compareResult.entries}
+                onClose={() => setCompareResult(null)}
+              />
+            )}
+          </div>
+
+          <footer className="status-bar">
+            <div className="status-left">
+              {doc && (
+                <>
+                  <span className="status-item">
+                    {t('appPageOf', { current: pageInfo.current, total: pageInfo.total })}
+                  </span>
+                  <button
+                    className="status-item status-wordcount"
+                    title={t('appWordCountTitle')}
+                    onClick={openStats}
+                  >
+                    {t('appWordCountN', { n: wordCount })}
+                  </button>
+                </>
+              )}
+              {!doc && t('appReady')}
+              {status && <span className="status-msg"> — {status}</span>}
+            </div>
+            <div className="status-right">
+              <button
+                className="zoom-btn"
+                onClick={() => setZoom((z) => Math.max(50, Math.round(z) - 10))}
+              >
+                −
+              </button>
+              <input
+                className="zoom-slider"
+                type="range"
+                min={50}
+                max={200}
+                step={10}
+                value={Math.round(zoom)}
+                onChange={(e) => setZoom(Number(e.target.value))}
+              />
+              <button
+                className="zoom-btn"
+                onClick={() => setZoom((z) => Math.min(200, Math.round(z) + 10))}
+              >
+                +
+              </button>
+              <span className="zoom-value">{Math.round(zoom)}%</span>
+            </div>
+          </footer>
         </div>
-        <div className="status-right">
-          <button
-            className="zoom-btn"
-            onClick={() => setZoom((z) => Math.max(50, Math.round(z) - 10))}
-          >
-            −
-          </button>
-          <input
-            className="zoom-slider"
-            type="range"
-            min={50}
-            max={200}
-            step={10}
-            value={Math.round(zoom)}
-            onChange={(e) => setZoom(Number(e.target.value))}
-          />
-          <button
-            className="zoom-btn"
-            onClick={() => setZoom((z) => Math.min(200, Math.round(z) + 10))}
-          >
-            +
-          </button>
-          <span className="zoom-value">{Math.round(zoom)}%</span>
-        </div>
-      </footer>
+      </div>
 
       {showLinkModal && <LinkInsertModal editor={editor} onClose={() => setShowLinkModal(false)} />}
       {showEquationModal && editor && (

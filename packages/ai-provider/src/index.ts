@@ -8,6 +8,7 @@ export type {
   AiStreamChunk,
   AiStreamRequest,
   GatewayAccountStatus,
+  GenSparkAccountStatus,
   LegacyAiSettings,
 } from './types'
 export {
@@ -23,5 +24,13 @@ export {
   hermesHealthUrl,
   resetHermesHealthCache,
 } from './hermes-health'
-export { sseLines, streamForProvider } from './stream'
+export { AiCreditsError, sseLines, streamForProvider } from './stream'
 export type { StreamCallbacks } from './stream'
+export {
+  AI_CHAT_RESPONSE_TIMEOUT_MS,
+  AI_CONNECT_TIMEOUT_MS,
+  AI_IDLE_TIMEOUT_MS,
+  AiTimeoutError,
+  createStreamWatchdog,
+} from './watchdog'
+export type { StreamWatchdog } from './watchdog'

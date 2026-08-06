@@ -27,8 +27,11 @@ export interface Run {
   color?: string
   /** font size in half-points (OOXML w:sz) */
   sizeHalfPoints?: number
-  /** font family name (w:rFonts, eastAsia/ascii) */
+  /** primary font family (w:rFonts, eastAsia ?? ascii ?? hAnsi) */
   font?: string
+  /** Latin-slot font (w:rFonts ascii/hAnsi) when the run declares one; may equal `font`.
+   * Kept separate so editing one script's font never flattens the other slot. */
+  fontAscii?: string
   /** Character spacing (w:spacing, twips, may be negative). Display only; saving is kept faithful by rawRPr */
   charSpacingTwips?: number
   /** Horizontal character scale percent (w:w). Display only (approximated as spacing); saving is kept faithful by rawRPr */
@@ -67,6 +70,8 @@ export interface Run {
    * holds the cached display result. Regenerates as a full REF field.
    */
   refField?: string
+  /** exact original REF instruction text; written back verbatim so switches (\r, \p, ...) survive */
+  refInstr?: string
   /** Generic inline field (DATE/TIME/NUMPAGES/FILENAME etc.): full instruction text; run text is the cached result */
   instrField?: string
   /**
@@ -83,6 +88,7 @@ export interface Run {
       color?: string
       sizeHalfPoints?: number
       font?: string
+      fontAscii?: string
       charSpacingTwips?: number
       charScalePct?: number
       highlight?: string
@@ -384,6 +390,8 @@ export interface FieldDisplay {
   level?: number
   /** bookmark anchor of the tocLine hyperlink (_Toc...), for click-to-jump */
   anchor?: string
+  /** numbering marker of the entry's w:numPr ("1.", "1.1."), computed at parse time */
+  num?: string
 }
 
 /** Editable text tokens inside an OMML formula; the surrounding math tree is preserved. */
@@ -418,6 +426,9 @@ export interface ChartDisplay {
   title?: string
   categories: string[]
   series: ChartSeries[]
+  /** display size (from wp:extent), editable via the corner resize handle */
+  widthPx?: number
+  heightPx?: number
 }
 
 /** A new chart to embed at save time (becomes word/charts/chartN.xml + relationship). */

@@ -15,7 +15,7 @@ import {
   injectInkRunsIntoParagraph,
   stripInkRuns,
 } from './ink'
-import type { ParseExtras } from './parse'
+import { assertZipWithinLimits, type ParseExtras } from './parse'
 import { BLANK_NUMBERING_XML, abstractNumXml, type CustomNumberingLevel } from './blank'
 import { applyPageNumType, applySectionSettings, applySectionStartType } from './section'
 import {
@@ -66,7 +66,7 @@ export type SaveBlock = (
   /** a new inline image; bytes become word/media/... + relationship */
   | { kind: 'image'; image: NewImage }
   /** a new embedded chart; data becomes word/charts/chartN.xml + relationship */
-  | { kind: 'chart'; chart: NewChart }
+  | { kind: 'chart'; chart: NewChart; extentPx?: { w: number; h: number } }
 ) & {
   /** Top-level tracked insertion/deletion wrapper. */
   revision?: { kind: 'ins' | 'del'; author: string; date?: string; id?: string }
@@ -392,6 +392,7 @@ export async function saveDocx(
   if (isUnchanged) return originalBytes
 
   const zip = await JSZip.loadAsync(originalBytes)
+  assertZipWithinLimits(zip)
 
   // Relationship allocation for newly created hyperlinks and images.
   const relsPath = 'word/_rels/document.xml.rels'
@@ -461,7 +462,10 @@ export async function saveDocx(
     base64: string
   }> = []
   let chartDocPrId = 8000
-  const embedChart = async (chart: NewChart): Promise<string> => {
+  const embedChart = async (
+    chart: NewChart,
+    extentPx?: { w: number; h: number },
+  ): Promise<string> => {
     let n = 1
     while (
       zip.file(`word/charts/chart${n}.xml`) ||
@@ -491,9 +495,11 @@ export async function saveDocx(
     })
 
     const docPrId = chartDocPrId++
+    const cx = extentPx ? Math.max(1, Math.round(extentPx.w * 9525)) : 5486400
+    const cy = extentPx ? Math.max(1, Math.round(extentPx.h * 9525)) : 3200400
     return (
       '<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">' +
-      '<wp:extent cx="5486400" cy="3200400"/>' +
+      `<wp:extent cx="${cx}" cy="${cy}"/>` +
       `<wp:docPr id="${docPrId}" name="Chart ${docPrId}"/>` +
       '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
       '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
@@ -872,7 +878,7 @@ export async function saveDocx(
       xml = fb.xml
       fbDocxIndex = fb.docxIndex
     } else if (fb.kind === 'chart') {
-      xml = await embedChart(fb.chart)
+      xml = await embedChart(fb.chart, fb.extentPx)
     } else {
       xml = embedImage(fb.image)
     }

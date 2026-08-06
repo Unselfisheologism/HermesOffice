@@ -1,7 +1,7 @@
 import type { Editor } from '@tiptap/core'
 import type { AgentSkill } from '@hermesoffice/agent-core'
 import { AGENT_SYSTEM_PROMPT, buildDocContext, type AiTrack, type NumIds } from './protocol'
-import { AGENT_TOOLS, executeTool } from './tools'
+import { AGENT_TOOLS, executeTool, markDocSeen } from './tools'
 
 /**
  * The docx capability as an AgentSkill: document skeleton context, the five
@@ -12,15 +12,17 @@ export function createDocsSkill(
   getEditor: () => Editor,
   getNumIds: () => NumIds,
   getTrack?: () => AiTrack | undefined,
-  // Fork: caminho do arquivo aberto — permite ao agente editar o arquivo no
-  // disco via MCP (genoffice_docx_patch) e o app recarregar sozinho
-  getFilePath?: () => string,
 ): AgentSkill {
   return {
     id: 'docx',
     systemPrompt: AGENT_SYSTEM_PROMPT,
     tools: AGENT_TOOLS,
-    buildContext: () => buildDocContext(getEditor(), getFilePath?.()),
-    executeTool: (call) => executeTool(getEditor(), call, getNumIds(), getTrack?.()),
+    buildContext: () => {
+      const editor = getEditor()
+      markDocSeen(editor) // the context the model receives is the freshness baseline for index-addressed writes
+      return buildDocContext(editor)
+    },
+    executeTool: (call, signal) =>
+      executeTool(getEditor(), call, getNumIds(), getTrack?.(), signal),
   }
 }

@@ -1,3 +1,4 @@
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import {
   PDFArray,
   PDFBool,
@@ -129,8 +130,51 @@ function ellipseOps(x1: number, y1: number, x2: number, y2: number): string[] {
   ]
 }
 
+/**
+ * Image signature/stamp: a Stamp annotation whose appearance stream draws the embedded PNG.
+ * The image is counter-rotated against the page's final /Rotate (viewers rotate annotation
+ * appearances with the page), so it displays upright — matching the renderer preview.
+ */
+async function addImageStamp(
+  pdfDoc: PDFDocument,
+  page: PDFPage,
+  d: Extract<DrawingInput, { kind: 'image' }>,
+): Promise<void> {
+  const png = await pdfDoc.embedPng(d.image)
+  const [x1, y1, x2, y2] = d.rect
+  const rw = x2 - x1
+  const rh = y2 - y1
+  const rot = ((page.getRotation().angle % 360) + 360) % 360
+  // cm matrix mapping the image unit square into the BBox, pre-counter-rotated for the page
+  const cm =
+    rot === 90
+      ? `0 ${num(rh)} ${num(-rw)} 0 ${num(rw)} 0`
+      : rot === 180
+        ? `${num(-rw)} 0 0 ${num(-rh)} ${num(rw)} ${num(rh)}`
+        : rot === 270
+          ? `0 ${num(-rh)} ${num(rw)} 0 0 ${num(rh)}`
+          : `${num(rw)} 0 0 ${num(rh)} 0 0`
+  const ap = pdfDoc.context.stream(`q ${cm} cm /Im0 Do Q`, {
+    Type: 'XObject',
+    Subtype: 'Form',
+    BBox: [0, 0, num(rw), num(rh)],
+    Resources: { XObject: { Im0: png.ref } },
+  })
+  const annot = pdfDoc.context.obj({
+    Type: 'Annot',
+    Subtype: 'Stamp',
+    Rect: [num(x1), num(y1), num(x2), num(y2)],
+    F: 4,
+    P: page.ref,
+    AP: { N: pdfDoc.context.register(ap) },
+  })
+  annot.set(PDFName.of('T'), PDFHexString.fromText('HermesOffice'))
+  appendAnnot(pdfDoc, page, pdfDoc.context.register(annot))
+}
+
 /** Drawing annots: hand-written AP for Ink/Square/Circle/Line; notes are standard Text annots (viewer draws the icon) */
 function addDrawing(pdfDoc: PDFDocument, page: PDFPage, d: DrawingInput): void {
+  if (d.kind === 'image') return // handled by addImageStamp (needs async embed)
   const [r, g, b] = d.color
 
   if (d.kind === 'note') {
@@ -282,6 +326,29 @@ function applyMetadata(pdfDoc: PDFDocument, meta: MetadataInput): void {
   pdfDoc.setModificationDate(new Date())
 }
 
+/**
+ * Apply the request to the PDF at sourcePath and atomically write the result to targetPath
+ * (temp file next to the target + rename, so a mid-write crash can't corrupt it).
+ * The source file is only ever read: Save As (targetPath !== sourcePath) must never mutate
+ * the original document, and a failed or cancelled save leaves both paths untouched.
+ * In-place Save passes targetPath === sourcePath.
+ */
+export async function savePdfToPath(
+  sourcePath: string,
+  targetPath: string,
+  request: SavePdfRequest,
+): Promise<void> {
+  const bytes = await applySaveRequest(new Uint8Array(await readFile(sourcePath)), request)
+  const tmp = `${targetPath}.gensave-${process.pid}.tmp`
+  try {
+    await writeFile(tmp, bytes)
+    await rename(tmp, targetPath)
+  } catch (err) {
+    await rm(tmp, { force: true })
+    throw err
+  }
+}
+
 /** Apply markups + form values + page ops, returning new bytes. Original objects are not reordered (pdf-lib keeps untouched objects). */
 export async function applySaveRequest(
   bytes: Uint8Array,
@@ -301,7 +368,9 @@ export async function applySaveRequest(
   }
   for (const d of request.drawings ?? []) {
     const page = pages[d.pageIndex]
-    if (page) addDrawing(pdfDoc, page, d)
+    if (!page) continue
+    if (d.kind === 'image') await addImageStamp(pdfDoc, page, d)
+    else addDrawing(pdfDoc, page, d)
   }
   for (const s of request.stamps ?? []) {
     const page = pages[s.pageIndex]

@@ -25,6 +25,8 @@ export interface AgentRunResult {
   cancelled: boolean
   /** true when maxTurns was reached; text is the partial answer from the no-tools finalizing turn */
   turnLimit: boolean
+  /** the final turn hit the token limit (stop_reason max_tokens): text is incomplete; set only when true */
+  truncated?: boolean
 }
 
 export interface AgentLoopEvents<TSnapshot> {
@@ -65,8 +67,6 @@ export interface AgentLoopOptions<TSnapshot = unknown> {
   formatUserMessage?(instruction: string, context: string): string
   /** appended to the system prompt each turn (e.g. reply-language directive following the UI language) */
   systemSuffix?(): string
-  /** stable conversation id → forwarded as X-Hermes-Session-Id for gateway session continuity */
-  sessionId?: string | (() => string | undefined)
 }
 
 const COMPACT_MAX_BYTES = 256 * 1024
@@ -78,12 +78,21 @@ const SUMMARIZE_TIMEOUT_MS = 30_000
 const STALE_TOOL_KEEP_RECENT = 2
 const STALE_TOOL_OUTPUT_MAX = 1_000
 
-/** Per-run retry cap for tool-input parse failures; abort beyond it (keeps the model from burning turns on bad JSON) */
+/** Cap on consecutive tool-input parse failures (a successful parse resets it); abort beyond it (keeps the model from burning turns on bad JSON) */
 const MAX_INPUT_PARSE_RETRIES = 3
 
 const TURN_LIMIT_NOTE =
   '[System] The tool-call turn limit for this request has been reached; no more tools may be called this turn. ' +
   'Answer directly from the information already gathered; if the task is unfinished, briefly state what is done and what remains.'
+
+/**
+ * Terminal assistant text when tools mutated the artifact (or an edits-only
+ * turn was restored) and the model returned no prose. Must be non-empty so
+ * provider message converters never emit empty assistant content, which breaks
+ * multi-turn follow-ups (see finishTurn / restore).
+ * Exported so apps can substitute a localized / tool-derived summary in the UI.
+ */
+export const COMPLETED_VIA_TOOLS_TEXT = '(completed tool actions; no text reply)'
 
 const SUMMARIZE_SYSTEM =
   'You are a conversation compressor. Compress this editing session between the user and the AI assistant into a concise summary so later turns can continue with context. ' +
@@ -160,6 +169,7 @@ export class AgentLoop<TSnapshot = unknown> {
   private finalizing = false
   private mutationSeen = false
   private inputParseFails = 0
+  private turnStopReason: string | null = null
   private turnText = ''
   private toolCalls: AgentToolCall[] = []
   /** user message of the in-flight run; a failed run rolls it (and everything after) back out of history */
@@ -190,11 +200,16 @@ export class AgentLoop<TSnapshot = unknown> {
    */
   restore(messages: readonly AgentMessage[]): void {
     if (this.running || this.history.length > 0 || messages.length === 0) return
+    // Edits-only runs persist an assistant message with no text; give it a placeholder
+    // so the turn stays paired and providers never see an empty assistant content block
+    const normalized = messages.map((m) =>
+      m.role === 'assistant' && !m.text ? { ...m, text: COMPLETED_VIA_TOOLS_TEXT } : m,
+    )
     // Unanswered user messages (a failed or interrupted run persisted them without a
     // reply) must not re-enter the model context: trailing ones would pair with the
     // next instruction as one turn, adjacent ones read as a combined instruction
-    this.history = messages.filter(
-      (m, i) => m.role !== 'user' || (messages[i + 1] && messages[i + 1]!.role !== 'user'),
+    this.history = normalized.filter(
+      (m, i) => m.role !== 'user' || (normalized[i + 1] && normalized[i + 1]!.role !== 'user'),
     )
     if (this.history.length === 0) return
     if (this.compactionEnabled()) {
@@ -253,6 +268,10 @@ export class AgentLoop<TSnapshot = unknown> {
     // Leftover unanswered user message (a previous run failed before replying):
     // drop it so the model never sees two adjacent user turns as one combined instruction
     while (this.history.at(-1)?.role === 'user') this.history.pop()
+    this.trimHistory()
+    if (userMsg.role === 'user') {
+      userMsg = { ...userMsg, text: sanitizeAgentPayload(userMsg.text) }
+    }
     this.runUserMsg = userMsg
     this.history.push(userMsg)
     this.startTurn()
@@ -424,25 +443,24 @@ export class AgentLoop<TSnapshot = unknown> {
     this.runUserMsg = null
   }
 
+  /** Runs at run boundaries only (restore / before a new user message): a long run's tail is all assistant/tool messages, and cutting mid-run would empty the request. */
   private trimHistory(): void {
     const max = this.options.maxHistory ?? 40
     if (this.history.length <= max) return
     // cut only at a user message so tool_use/tool_result pairs stay intact
     let i = this.history.length - max
     while (i < this.history.length && this.history[i]!.role !== 'user') i++
-    this.history = this.history.slice(i)
+    if (i >= this.history.length) return // no user boundary in the window: keep history over budget
+    const next = this.history.slice(i)
+    if (this.runUserMsg && !next.includes(this.runUserMsg)) return
+    this.history = next
   }
 
   private startTurn(): void {
     const generation = this.generation
-    this.trimHistory()
     this.turnText = ''
     this.toolCalls = []
-    // exactOptionalPropertyTypes: build the optional sessionId outside the literal
-    const sessionId =
-      typeof this.options.sessionId === 'function'
-        ? (this.options.sessionId as () => string | undefined)()
-        : this.options.sessionId
+    this.turnStopReason = null
     // Some transports emit an extra onDone after cancel — this turn may finalize only once
     let settled = false
     this.handle = this.options.transport.stream(
@@ -450,7 +468,6 @@ export class AgentLoop<TSnapshot = unknown> {
         system: this.options.skill.systemPrompt + (this.options.systemSuffix?.() ?? ''),
         messages: [...this.history],
         tools: this.finalizing ? [] : this.options.skill.tools,
-        ...(sessionId ? { sessionId } : {}),
       },
       {
         onDelta: (text) => {
@@ -461,6 +478,10 @@ export class AgentLoop<TSnapshot = unknown> {
         onToolCall: (call) => {
           if (generation !== this.generation || settled) return
           this.toolCalls.push(call)
+        },
+        onStopReason: (reason) => {
+          if (generation !== this.generation || settled) return
+          this.turnStopReason = reason
         },
         onDone: () => {
           if (generation !== this.generation || settled) return
@@ -486,13 +507,25 @@ export class AgentLoop<TSnapshot = unknown> {
     // no-tools finalizing turn after hitting the limit
     // (a cancelled turn drops its tool calls — no results would follow)
     if (toolCalls.length === 0 || this.cancelled || this.finalizing) {
-      this.history.push({ role: 'assistant', text: this.turnText })
+      // Models often end a tool-using run with an empty text turn ("I'm done").
+      // Leaving assistant text empty in history then poisons the next user
+      // prompt: Anthropic rejects empty content arrays, Gemini rejects empty
+      // parts, and OpenAI-compatible routes send content:null with no tool_calls —
+      // all of which make follow-up turns fail or return empty again (see
+      // hermesoffice#12 / #22: first prompt works, second shows "no summary").
+      // Same normalization as restore(), applied unconditionally: cancelled and
+      // read-only empty turns poison follow-ups just the same. onDone still
+      // reports the raw turn text so app UIs keep their localized fallbacks
+      // instead of surfacing this English placeholder.
+      this.history.push({ role: 'assistant', text: this.turnText || COMPLETED_VIA_TOOLS_TEXT })
       this.running = false
       this.runUserMsg = null
       events?.onDone?.({
         text: this.turnText,
         cancelled: this.cancelled,
         turnLimit: this.finalizing,
+        // set only when true so exact-shape consumers/tests stay unaffected
+        ...(this.turnStopReason === 'max_tokens' && !this.cancelled ? { truncated: true } : {}),
       })
       return
     }
@@ -512,21 +545,21 @@ export class AgentLoop<TSnapshot = unknown> {
         })
         continue
       }
-      // The input JSON failed to parse: don't execute; feed the error back so the model fixes the args and retries
-      if (call.inputError) {
+      // Unusable input (truncated by the token limit, or JSON that failed to parse):
+      // don't execute; feed a targeted error back so the model retries correctly
+      if (call.truncated || call.inputError) {
         this.inputParseFails++
-        results.push({
-          id: call.id,
-          name: call.name,
-          output: `Tool input JSON failed to parse; the tool was not executed: ${call.inputError}\nFix the arguments (make sure quotes inside strings are escaped) and call again.`,
-          isError: true,
-        })
+        const output = call.truncated
+          ? 'Tool arguments were cut off by the output length limit; the tool was not executed. Split this operation into several smaller tool calls (less content per call) and try again.'
+          : `Tool input JSON failed to parse; the tool was not executed: ${call.inputError}\nFix the arguments (make sure quotes inside strings are escaped) and call again.`
+        results.push({ id: call.id, name: call.name, output, isError: true })
         events?.onToolExecuted?.({
           call,
-          execution: { output: call.inputError, isError: true, summary: call.name },
+          execution: { output, isError: true, summary: call.name },
         })
         continue
       }
+      this.inputParseFails = 0
       events?.onToolStart?.(call)
       const snapshot = !this.mutationSeen ? captureSnapshot?.() : undefined
       let execution: ToolExecution
@@ -569,7 +602,7 @@ export class AgentLoop<TSnapshot = unknown> {
       this.running = false
       this.rollbackFailedRun()
       events?.onError?.(
-        `Tool input JSON failed to parse ${MAX_INPUT_PARSE_RETRIES} times in a row; retries stopped, please send the request again`,
+        `Tool input was unusable (unparseable or truncated) ${MAX_INPUT_PARSE_RETRIES} times in a row; retries stopped, please send the request again`,
       )
       return
     }
@@ -585,4 +618,23 @@ export class AgentLoop<TSnapshot = unknown> {
     events?.onTurnEnd?.()
     this.startTurn()
   }
+}
+
+/**
+ * Redact secret-looking tokens from an outgoing user message so accidentally
+ * pasted API keys, URL credentials, and password assignments don't reach
+ * remote model APIs verbatim.
+ *
+ * Imported from public PR #32 (BuiltByHarshil), with the credential pattern
+ * narrowed to URL userinfo (scheme://user:pass@host) so ordinary "a:b@c"
+ * prose is never rewritten.
+ */
+export function sanitizeAgentPayload(payload: string): string {
+  return payload
+    .replace(/\b(?:sk-|AIza|ghp_|secret_)[A-Za-z0-9_-]{16,}/g, '[REDACTED_API_KEY]')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/[^\s:@/]+):[^\s@/]+@/gi, '$1:[REDACTED_CREDENTIALS]@')
+    .replace(
+      /(password|passwd|secret_key|private_key)(\s*[:=]\s*)["'][^"']+["']/gi,
+      '$1$2"[REDACTED_SECURE_TOKEN]"',
+    )
 }

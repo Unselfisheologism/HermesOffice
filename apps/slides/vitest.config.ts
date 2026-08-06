@@ -13,7 +13,15 @@ export default defineConfig({
         here,
         '../../packages/pptx-engine/src/table-grid.ts',
       ),
+      '@hermesoffice/pptx-engine/background-promote': resolve(
+        here,
+        '../../packages/pptx-engine/src/background-promote.ts',
+      ),
       '@hermesoffice/pptx-engine': resolve(here, '../../packages/pptx-engine/src/index.ts'),
+      '@hermesoffice/pptx-render/preset-geometry': resolve(
+        here,
+        '../../packages/pptx-render/src/preset-geometry.ts',
+      ),
       '@hermesoffice/pptx-render': resolve(here, '../../packages/pptx-render/src/index.ts'),
     },
   },

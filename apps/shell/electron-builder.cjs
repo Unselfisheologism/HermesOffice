@@ -23,10 +23,16 @@ const updateUrl = process.env.HERMESOFFICE_UPDATE_URL
 // nested commander path depends on npm's current hoisting layout — fail the
 // build with a clear message if an install ever changes it, instead of
 // shipping an installer with a broken gsk runtime.
+// LICENSES.chromium.html only exists after the Electron binary download —
+// since Electron 42 that no longer happens during `npm ci` (the postinstall
+// script was replaced by the lazy `install-electron` bin), and electron-builder
+// exits 0 on a missing extraResources source, so without this check the
+// installer would silently ship without the Chromium license.
 for (const rel of [
   '../../node_modules/@genspark/cli',
   '../../node_modules/@genspark/cli/node_modules/commander',
   '../../node_modules/ws',
+  '../../node_modules/electron/dist/LICENSES.chromium.html',
 ]) {
   if (!existsSync(join(__dirname, rel))) {
     throw new Error(
@@ -35,23 +41,45 @@ for (const rel of [
   }
 }
 
+// The module trees are electron-vite outputs produced by build:all; a missing
+// one means that module's build did not run or failed. electron-builder only
+// logs "file source doesn't exist" for an absent extraResources source and
+// still exits 0, so without this the installer launches normally and is simply
+// missing that editor — it surfaces only when a user opens the tab.
+//
+// Runs from the beforePack hook, not at module load: gen-third-party-notices
+// requires this config to read extraResources, and the dist:* scripts run
+// notices before build:all, when the out dirs legitimately don't exist yet.
+function assertModuleTreesPresent() {
+  for (const rel of ['../docs/out', '../sheets/out', '../slides/out', '../pdf/out']) {
+    if (!existsSync(join(__dirname, rel))) {
+      throw new Error(
+        `electron-builder extraResources source missing: ${rel} (run npm run build:all first)`,
+      )
+    }
+  }
+}
+
 /** @type {import('electron-builder').Configuration} */
 const config = {
   appId: 'com.hermesoffice.app',
   productName: 'HermesOffice',
-  electronVersion: '41.7.1',
+  // Resolved from the installed electron package so dependency bumps can
+  // never leave a stale hard-coded pin behind (packaging would silently ship
+  // the old runtime).
+  electronVersion: require('electron/package.json').version,
   directories: {
     output: 'release',
   },
   files: ['out/**'],
   extraResources: [
     {
-      from: 'build/THIRD-PARTY-NOTICES.txt',
-      to: 'THIRD-PARTY-NOTICES.txt',
-    },
-    {
       from: 'build/build-info.json',
       to: 'build-info.json',
+    },
+    {
+      from: 'build/THIRD-PARTY-NOTICES.txt',
+      to: 'THIRD-PARTY-NOTICES.txt',
     },
     {
       from: '../../node_modules/electron/dist/LICENSES.chromium.html',
@@ -86,36 +114,45 @@ const config = {
       to: 'gsk/node_modules/ws',
     },
   ],
+  // `mimeType` is read only by the Linux target, where it becomes the
+  // desktop entry's MimeType= list; associations without it are dropped
+  // there. macOS and Windows ignore the field and key off `ext`.
   fileAssociations: [
     {
       ext: 'docx',
       name: 'Word Document',
       role: 'Editor',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     },
     {
       ext: 'xlsx',
       name: 'Excel Workbook',
       role: 'Editor',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     },
     {
       ext: 'pptx',
       name: 'PowerPoint Presentation',
       role: 'Editor',
+      mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     },
     {
       ext: 'xls',
       name: 'Excel 97-2003 Workbook',
       role: 'Editor',
+      mimeType: 'application/vnd.ms-excel',
     },
     {
       ext: 'csv',
       name: 'CSV Document',
       role: 'Editor',
+      mimeType: 'text/csv',
     },
     {
       ext: 'pdf',
       name: 'PDF Document',
       role: 'Editor',
+      mimeType: 'application/pdf',
     },
   ],
   npmRebuild: false,
@@ -148,9 +185,45 @@ const config = {
       },
     ],
   },
+  // Unlike win (which cross-compiles the sidecar to an explicit target
+  // triple), linux takes it from cargo's host-native target/release/ — the
+  // same source mac uses. So no `arch` is pinned here: electron-builder
+  // defaults to the build host's architecture, which is the only one the
+  // sidecar was actually built for. Packaging arm64 on an x64 host, or the
+  // reverse, needs a matching `cargo build --target` first.
+  linux: {
+    // AppImage only: it needs no packaging identity, whereas deb/rpm would
+    // require a Debian maintainer and homepage in the repo metadata.
+    target: ['AppImage'],
+    category: 'Office',
+    icon: 'build/icon.png',
+    // mac and win name the binary from productName; linux instead derives it
+    // from package.json "name", and "@hermesoffice/shell" sanitizes to the
+    // invalid "@hermesofficeshell". Setting it explicitly also makes the
+    // generated hermesoffice.desktop match the WM_CLASS Electron reports (it
+    // takes that from the executable basename), so the running window links
+    // back to its launcher entry.
+    executableName: 'hermesoffice',
+    // Electron takes its X11 app_id from package.json "desktopName"
+    // (hermesoffice.desktop); syncDesktopName makes electron-builder name the
+    // .desktop file and its StartupWMClass from the same value. Without it
+    // StartupWMClass falls back to productName ("HermesOffice"), which does not
+    // match the "hermesoffice" WM_CLASS the window actually reports — and X11
+    // compares case-sensitively, so the taskbar shows an unlinked window.
+    syncDesktopName: true,
+    extraResources: [
+      {
+        from: '../sheets/native/xlsx-engine/target/release/xlsx-sidecar',
+        to: 'native/xlsx-sidecar',
+      },
+    ],
+  },
   nsis: {
     oneClick: false,
     allowToChangeInstallationDirectory: true,
+  },
+  beforePack: async () => {
+    assertModuleTreesPresent()
   },
   dmg: {
     sign: true,

@@ -1,14 +1,14 @@
-/**
- * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
- * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
- * atribuição original preservada em NOTICE.
- */
-import { ensureHermesGatewayHealthy } from './hermes-health'
 import { httpBodyDetail } from './http-error'
-import { GENSPARK_LLM_BASE_URLS, HERMES_LLM_BASE_URL } from './providers'
+import {
+  GENSPARK_LLM_BASE_URLS,
+  HERMES_LLM_BASE_URL,
+  gensparkAttributionHeaders,
+} from './providers'
 import type { AiChatResponse, AiProviderConfig, AiProviderId } from './types'
+import { AI_CHAT_RESPONSE_TIMEOUT_MS, createStreamWatchdog, type StreamWatchdog } from './watchdog'
 
 async function chatAnthropic(
+  wd: StreamWatchdog,
   config: AiProviderConfig,
   system: string,
   user: string,
@@ -16,12 +16,14 @@ async function chatAnthropic(
 ): Promise<AiChatResponse> {
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
     method: 'POST',
+    signal: wd.signal,
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': config.apiKey,
       'anthropic-version': '2023-06-01',
       // Fetch in the Electron main process goes through Chromium's network stack; this header avoids 403.
       'anthropic-dangerous-direct-browser-access': 'true',
+      ...gensparkAttributionHeaders(baseUrl),
     },
     body: JSON.stringify({
       model: config.model,
@@ -30,6 +32,7 @@ async function chatAnthropic(
       messages: [{ role: 'user', content: user }],
     }),
   })
+  wd.touch()
   if (!response.ok) {
     return {
       ok: false,
@@ -46,6 +49,7 @@ async function chatAnthropic(
 }
 
 async function chatGemini(
+  wd: StreamWatchdog,
   config: AiProviderConfig,
   system: string,
   user: string,
@@ -54,13 +58,19 @@ async function chatGemini(
   const url = `${baseUrl.replace(/\/$/, '')}/models/${config.model}:generateContent`
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
+    signal: wd.signal,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': config.apiKey,
+      ...gensparkAttributionHeaders(baseUrl),
+    },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
       generationConfig: { temperature: 0.3 },
     }),
   })
+  wd.touch()
   if (!response.ok) {
     return {
       ok: false,
@@ -76,6 +86,7 @@ async function chatGemini(
 }
 
 async function chatOpenAiCompatible(
+  wd: StreamWatchdog,
   baseUrl: string,
   config: AiProviderConfig,
   system: string,
@@ -83,9 +94,11 @@ async function chatOpenAiCompatible(
 ): Promise<AiChatResponse> {
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
+    signal: wd.signal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
+      ...gensparkAttributionHeaders(baseUrl),
     },
     body: JSON.stringify({
       model: config.model,
@@ -96,6 +109,7 @@ async function chatOpenAiCompatible(
       temperature: 0.3,
     }),
   })
+  wd.touch()
   if (!response.ok) {
     return { ok: false, error: `HTTP ${response.status}: ${httpBodyDetail(await response.text())}` }
   }
@@ -116,34 +130,45 @@ export async function chatForProvider(
   config: AiProviderConfig,
   system: string,
   user: string,
+  signal?: AbortSignal,
 ): Promise<AiChatResponse> {
-  switch (provider) {
-    case 'hermes':
-      try {
-        await ensureHermesGatewayHealthy(config.baseUrl || HERMES_LLM_BASE_URL)
-      } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : String(e) }
-      }
-      return chatOpenAiCompatible(config.baseUrl || HERMES_LLM_BASE_URL, config, system, user)
-    case 'genspark':
-      if (config.model.startsWith('claude')) {
-        return chatAnthropic(config, system, user, GENSPARK_LLM_BASE_URLS.anthropic)
-      }
-      if (config.model.startsWith('gemini')) {
-        return chatGemini(config, system, user, GENSPARK_LLM_BASE_URLS.gemini)
-      }
-      return chatOpenAiCompatible(GENSPARK_LLM_BASE_URLS.openai, config, system, user)
-    case 'anthropic':
-      return chatAnthropic(config, system, user)
-    case 'gemini':
-      return chatGemini(config, system, user)
-    case 'deepseek':
-    case 'openai':
-      return chatOpenAiCompatible(OPENAI_COMPATIBLE_BASE_URLS[provider]!, config, system, user)
-    case 'custom':
-      if (!config.baseUrl) return { ok: false, error: 'A custom provider requires a Base URL' }
-      return chatOpenAiCompatible(config.baseUrl, config, system, user)
-    default:
-      return { ok: false, error: `Unknown provider: ${provider}` }
-  }
+  // non-streaming: the server generates the full answer before the headers arrive,
+  // so the connect phase gets the long budget; the body read then gets the idle budget
+  const wd = createStreamWatchdog(signal, AI_CHAT_RESPONSE_TIMEOUT_MS)
+  return wd.guard(() => {
+    switch (provider) {
+      case 'hermes':
+        return chatOpenAiCompatible(wd, config.baseUrl || HERMES_LLM_BASE_URL, config, system, user)
+      case 'genspark':
+        if (config.model.startsWith('claude')) {
+          return chatAnthropic(wd, config, system, user, GENSPARK_LLM_BASE_URLS.anthropic)
+        }
+        if (config.model.startsWith('gemini')) {
+          return chatGemini(wd, config, system, user, GENSPARK_LLM_BASE_URLS.gemini)
+        }
+        return chatOpenAiCompatible(wd, GENSPARK_LLM_BASE_URLS.openai, config, system, user)
+      case 'anthropic':
+        return chatAnthropic(wd, config, system, user)
+      case 'gemini':
+        return chatGemini(wd, config, system, user)
+      case 'deepseek':
+      case 'openai':
+        return chatOpenAiCompatible(
+          wd,
+          OPENAI_COMPATIBLE_BASE_URLS[provider]!,
+          config,
+          system,
+          user,
+        )
+      case 'custom':
+        if (!config.baseUrl)
+          return Promise.resolve({
+            ok: false as const,
+            error: 'A custom provider requires a Base URL',
+          })
+        return chatOpenAiCompatible(wd, config.baseUrl, config, system, user)
+      default:
+        return Promise.resolve({ ok: false as const, error: `Unknown provider: ${provider}` })
+    }
+  })
 }

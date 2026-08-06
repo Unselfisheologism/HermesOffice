@@ -1,15 +1,13 @@
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { Editor } from '@tiptap/core'
-import {
-  WORDART_PRESETS,
-  type ChartDisplay,
-  type HeaderFooter,
-  type NewChart,
-} from '@hermesoffice/docx-engine'
+import { ShapePreview, WORDART_PRESETS, wordArtStrokePx } from '@hermesoffice/ui'
+import type { ChartDisplay, HeaderFooter, NewChart } from '@hermesoffice/docx-engine'
 import { EquationGallery, EquationModal } from './EquationModal'
 import { COVER_PRESETS, insertCoverPage, type CoverPreset } from '../editor/cover-pages'
-import { useI18n } from '../i18n/locale'
+import { startShapeDrawMode } from '../editor/shape-draw'
+import { useI18n, type StringKey } from '../i18n/locale'
+import { useModalKeys } from './modal-keys'
 import {
   IconBook,
   IconCaret,
@@ -38,7 +36,7 @@ import {
 import {
   BIG,
   InsertTabProps,
-  SHAPE_PRESETS,
+  DOC_SHAPE_GROUPS,
   insertBlankPageAt,
   insertImageViaDialog,
   insertPageBreakAt,
@@ -465,13 +463,14 @@ export function ChartInsertModal({ editor, onClose }: { editor: Editor; onClose:
 /** Insert Hyperlink dialog, shared by the ribbon and the native application menu */
 export function LinkInsertModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const [linkText, setLinkText] = useState('')
   const [linkUrl, setLinkUrl] = useState('')
 
   const insertLink = () => {
     const href = linkUrl.trim()
     const text = linkText.trim() || href
-    if (!href) return
+    if (!href || !editor.isEditable) return
     editor
       .chain()
       .focus()
@@ -481,7 +480,12 @@ export function LinkInsertModal({ editor, onClose }: { editor: Editor; onClose: 
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      className="modal-backdrop"
+      ref={modalKeys.ref}
+      onKeyDown={modalKeys.onKeyDown}
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
       <div className="modal">
         <h2>{t('ribbonLinkInsertTitle')}</h2>
         <label>
@@ -725,27 +729,30 @@ export function InsertTab({
               <span>{t('ribbonShapes')}</span>
             </button>
             {dropdown === 'shape' && (
-              <div className="shape-palette">
-                {SHAPE_PRESETS.map((s) => (
-                  <button
-                    key={s.prst}
-                    className="shape-cell"
-                    title={t(s.labelKey)}
-                    onClick={() => {
-                      insertShapeAt(editor, s.prst)
-                      setDropdown(() => null)
-                    }}
-                  >
-                    <span
-                      className="shape-preview"
-                      style={{
-                        background: '#4472C4',
-                        ...(s.clipPath ? { clipPath: s.clipPath } : {}),
-                        ...(s.borderRadius ? { borderRadius: s.borderRadius } : {}),
-                      }}
-                    />
-                    <span className="shape-label">{t(s.labelKey)}</span>
-                  </button>
+              <div className="shape-palette rb-shape-gallery">
+                {DOC_SHAPE_GROUPS.map((group) => (
+                  <div key={group.groupKey}>
+                    <div className="rb-drop-title">{t(group.groupKey as StringKey)}</div>
+                    <div className="rb-shape-grid">
+                      {group.shapes.map((s) => (
+                        <button
+                          key={s.prst}
+                          className="rb-shape-cell"
+                          title={t(s.labelKey as StringKey)}
+                          onClick={() => {
+                            // Word parity: arm crosshair draw mode (click = default 1in
+                            // square, drag = custom size, Shift = square, Esc = cancel)
+                            startShapeDrawMode(editor, s.prst, (opts) =>
+                              insertShapeAt(editor, s.prst, opts),
+                            )
+                            setDropdown(() => null)
+                          }}
+                        >
+                          <ShapePreview prst={s.prst} size={18} />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
@@ -789,23 +796,21 @@ export function InsertTab({
                   <button
                     key={p.id}
                     className="wordart-cell"
-                    title={p.label}
+                    title={t(p.nameKey as StringKey)}
+                    style={{
+                      color: p.fill,
+                      WebkitTextStroke: p.outline
+                        ? `${wordArtStrokePx(p.outline.widthEmu)}px ${p.outline.color}`
+                        : undefined,
+                      fontWeight: p.bold ? 800 : 400,
+                      fontStyle: p.italic ? 'italic' : undefined,
+                    }}
                     onClick={() => {
-                      insertWordArtAt(editor, p.id)
+                      insertWordArtAt(editor, p)
                       setDropdown(() => null)
                     }}
                   >
-                    <span
-                      className="wordart-preview"
-                      style={{
-                        WebkitTextFillColor: p.noFill ? 'transparent' : `#${p.colorHex}`,
-                        WebkitTextStroke: p.noFill ? `2px #${p.borderHex}` : undefined,
-                        color: `#${p.colorHex}`,
-                      }}
-                    >
-                      {t('ribbonWordArtPreviewChar')}
-                    </span>
-                    <span className="wordart-label">{p.label}</span>
+                    {t('ribbonWordArtPreviewChar')}
                   </button>
                 ))}
               </div>

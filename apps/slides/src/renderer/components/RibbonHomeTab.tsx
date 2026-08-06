@@ -17,7 +17,7 @@ import {
   IconCopy,
   IconCut,
   IconFind,
-  IconFormatBrush,
+  IconFormatPainter,
   IconGrowFont,
   IconIndentDec,
   IconIndentInc,
@@ -32,7 +32,11 @@ import {
   IconObjAlignTop,
   IconObjDistributeH,
   IconObjDistributeV,
+  IconObjFlipH,
+  IconObjFlipV,
   IconPaste,
+  IconPlayCurrent,
+  IconPlayFromStart,
   IconPosition,
   IconSection,
   IconShrinkFont,
@@ -45,6 +49,7 @@ import {
   Group,
   RbCaret,
   TEXT_COLORS,
+  closeSiblingPanels,
   type RibbonTabCtx,
 } from './ribbon-shared'
 
@@ -54,6 +59,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
     brushMode,
     canDistribute,
     canPaste,
+    curBulletChar,
     curFontFamily,
     curFontSizeMixed,
     curFontSizePt,
@@ -85,12 +91,14 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
     onPaste,
     onResetLayout,
     onSetLayout,
+    onSlideShow,
     onStrike,
     onTextColor,
     onTextToggle,
     onToggleAi,
     onToggleFormat,
     arrangeOpen,
+    closePanels,
     collapseOpen,
     collapsedGroups,
     colorOpen,
@@ -120,11 +128,18 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
     setParaOpen,
     setSizeDraft,
     setSizeOpen,
+    setSlideShowFromStart,
+    setSlideShowOpen,
     sizeDraft,
     sizeOpen,
+    slideShowFromStart,
+    slideShowOpen,
     t,
   } = rb
   const [hangDraft, setHangDraft] = useState('')
+  // Typed-ahead font query: only what the user actually typed filters the menu
+  // (opening via the caret or focusing shows the full list)
+  const [fontFilter, setFontFilter] = useState('')
   const EMU_PER_PX = 9525
   const commitHangDraft = () => {
     const px = parseFloat(hangDraft.replace(',', '.'))
@@ -204,7 +219,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
             onClick={onCut}
             title={t('ribbonCutTip')}
           >
-            <IconCut size={16} />
+            <IconCut size={14} />
           </button>
           <button
             className="rb-icon"
@@ -212,7 +227,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
             onClick={onCopy}
             title={t('ribbonCopyTip')}
           >
-            <IconCopy size={16} />
+            <IconCopy size={14} />
           </button>
           <button
             className={`rb-icon${brushMode ? ' on' : ''}`}
@@ -234,8 +249,71 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
               onFormatBrushDoubleClick()
             }}
           >
-            <IconFormatBrush size={16} />
+            <IconFormatPainter size={14} />
           </button>
+        </div>
+      </Group>
+      <div className="ribbon-sep" />
+      <Group label={t('ribbonTabSlideShow')}>
+        <div className="rb-drop-wrap">
+          <button
+            className="rb-big"
+            disabled={!hasDoc}
+            onClick={() => onSlideShow(slideShowFromStart)}
+            title={t(slideShowFromStart ? 'ribbonFromBeginningTip' : 'ribbonFromCurrentTip')}
+          >
+            <span className="rb-big-icon">
+              {slideShowFromStart ? (
+                <IconPlayFromStart size={BIG} />
+              ) : (
+                <IconPlayCurrent size={BIG} />
+              )}
+              <span
+                className={`rb-caret-hit${slideShowOpen ? ' active' : ''}`}
+                onMouseDown={(e) => {
+                  e.stopPropagation()
+                  closeSiblingPanels(e, closePanels, 'slideShow')
+                }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (hasDoc) setSlideShowOpen((v) => !v)
+                }}
+              >
+                <RbCaret />
+              </span>
+            </span>
+            <span>{t(slideShowFromStart ? 'ribbonFromBeginning' : 'ribbonFromCurrent')}</span>
+          </button>
+          {slideShowOpen && (
+            <div className="rb-drop rb-menu" onMouseDown={(e) => e.stopPropagation()}>
+              <button
+                onClick={() => {
+                  setSlideShowOpen(false)
+                  setSlideShowFromStart(true)
+                  onSlideShow(true)
+                }}
+                title={t('ribbonFromBeginningTip')}
+              >
+                <span className="rb-menu-glyph">
+                  <IconPlayFromStart size={20} />
+                </span>
+                {t('ribbonFromBeginning')}
+              </button>
+              <button
+                onClick={() => {
+                  setSlideShowOpen(false)
+                  setSlideShowFromStart(false)
+                  onSlideShow(false)
+                }}
+                title={t('ribbonFromCurrentTip')}
+              >
+                <span className="rb-menu-glyph">
+                  <IconPlayCurrent size={20} />
+                </span>
+                {t('ribbonFromCurrent')}
+              </button>
+            </div>
+          )}
         </div>
       </Group>
       <div className="ribbon-sep" />
@@ -245,7 +323,10 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
         collapse={{
           collapsed: collapsedGroups.includes('slides'),
           open: collapseOpen === 'slides',
-          onToggle: () => setCollapseOpen((v) => (v === 'slides' ? null : 'slides')),
+          onToggle: () => {
+            closePanels(['collapse'])
+            setCollapseOpen((v) => (v === 'slides' ? null : 'slides'))
+          },
           icon: <IconNewSlide size={BIG} />,
         }}
       >
@@ -261,7 +342,10 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
               <span
                 className={`rb-caret-hit${layoutOpen ? ' active' : ''}`}
                 title={t('ribbonChooseLayout')}
-                onMouseDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => {
+                  e.stopPropagation()
+                  closeSiblingPanels(e, closePanels, 'layout')
+                }}
                 onClick={(e) => {
                   e.stopPropagation()
                   if (hasDoc) setLayoutOpen((v) => !v)
@@ -327,6 +411,10 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
           <button
             className={`rb-big ${layoutPickOpen ? 'active' : ''}`}
             disabled={!hasDoc}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              closeSiblingPanels(e, closePanels, 'layoutPick')
+            }}
             onClick={() => setLayoutPickOpen((v) => !v)}
             title={t('ribbonLayoutTip')}
           >
@@ -435,10 +523,21 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                   }}
                   onFocus={(e) => {
                     setFontDraft(curFontFamily ?? '')
+                    setFontFilter('')
                     e.target.select()
                   }}
-                  onChange={(e) => setFontDraft(e.target.value)}
-                  onBlur={() => setFontDraft(null)}
+                  onChange={(e) => {
+                    setFontDraft(e.target.value)
+                    setFontFilter(e.target.value)
+                    // Ribbon menus are mutually exclusive: close any open sibling
+                    // popup (size/color/...) before opening the font list
+                    closePanels(['font'])
+                    setFontOpen(true)
+                  }}
+                  onBlur={() => {
+                    setFontDraft(null)
+                    setFontFilter('')
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
@@ -460,8 +559,9 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                     e.preventDefault()
                     e.stopPropagation()
                     if (editing || hasTextSelection) {
+                      closeSiblingPanels(e, closePanels, 'font')
+                      setFontFilter('')
                       setFontOpen((v) => !v)
-                      setSizeOpen(false)
                     }
                   }}
                 >
@@ -476,20 +576,26 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                   {(curFontFamily && !FONT_FAMILIES.includes(curFontFamily)
                     ? [curFontFamily, ...FONT_FAMILIES]
                     : FONT_FAMILIES
-                  ).map((f) => (
-                    <button
-                      key={f}
-                      className={f === curFontFamily ? 'on' : ''}
-                      style={{ fontFamily: displayFontFamily(f) }}
-                      onMouseDown={(e) => {
-                        e.preventDefault()
-                        onFontFamily(f)
-                        setFontOpen(false)
-                      }}
-                    >
-                      {f}
-                    </button>
-                  ))}
+                  )
+                    .filter(
+                      (f) =>
+                        !fontFilter.trim() ||
+                        f.toLowerCase().includes(fontFilter.trim().toLowerCase()),
+                    )
+                    .map((f) => (
+                      <button
+                        key={f}
+                        className={f === curFontFamily ? 'on' : ''}
+                        style={{ fontFamily: displayFontFamily(f) }}
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          onFontFamily(f)
+                          setFontOpen(false)
+                        }}
+                      >
+                        {f}
+                      </button>
+                    ))}
                 </div>
               )}
             </div>
@@ -544,8 +650,8 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                     e.preventDefault()
                     e.stopPropagation()
                     if (editing || hasTextSelection) {
+                      closeSiblingPanels(e, closePanels, 'size')
                       setSizeOpen((v) => !v)
-                      setFontOpen(false)
                     }
                   }}
                 >
@@ -640,7 +746,10 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                 onMouseDown={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
-                  if (editing || hasSelection) setColorOpen((v) => !v)
+                  if (editing || hasSelection) {
+                    closeSiblingPanels(e, closePanels, 'color')
+                    setColorOpen((v) => !v)
+                  }
                 }}
               >
                 <span className="rb-font-color">
@@ -704,6 +813,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
             data-keep-edit=""
             onMouseDown={(e) => {
               e.stopPropagation()
+              closeSiblingPanels(e, closePanels, 'para')
               if (editing) saveEditSelection()
             }}
             onClick={() => setParaOpen((v) => !v)}
@@ -768,11 +878,22 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                   </button>
                 </div>
                 <div className="rb-para-label">{t('ribbonBulletChar')}</div>
-                <div className="rb-row">
+                <div className="rb-bullet-grid">
+                  <button
+                    className={`rb-bullet-tile rb-bullet-tile-none ${curBulletChar === '' ? 'on' : ''}`}
+                    disabled={!hasSelection}
+                    title={t('ribbonNone')}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      if (hasSelection) onParagraphFormat({ bullet: 'none' })
+                    }}
+                  >
+                    {t('ribbonNone')}
+                  </button>
                   {['•', '○', '▪', '◆', '-', '✓', '►', '※'].map((g) => (
                     <button
                       key={g}
-                      className="rb-icon rb-bullet-char"
+                      className={`rb-bullet-tile ${curBulletChar === g ? 'on' : ''}`}
                       disabled={!hasSelection}
                       title={t('ribbonBulletChar')}
                       onMouseDown={(e) => {
@@ -780,7 +901,12 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                         if (hasSelection) onParagraphFormat({ bullet: 'char', bulletChar: g })
                       }}
                     >
-                      {g}
+                      {[0, 1, 2].map((i) => (
+                        <span key={i} className="rb-bullet-tile-row">
+                          <span className="rb-bullet-tile-glyph">{g}</span>
+                          <span className="rb-bullet-tile-bar" />
+                        </span>
+                      ))}
                     </button>
                   ))}
                 </div>
@@ -904,7 +1030,10 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                       onMouseDown={(e) => {
                         e.preventDefault()
                         e.stopPropagation()
-                        if (hasSelection) setLineSpacingOpen((v) => !v)
+                        if (hasSelection) {
+                          closeSiblingPanels(e, closePanels, 'lineSpacing')
+                          setLineSpacingOpen((v) => !v)
+                        }
                       }}
                     >
                       <IconLineSpacing size={20} />
@@ -995,7 +1124,10 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                 ? t('ribbonAlignMenuTip')
                 : t('ribbonSelectFirstHint', { title: t('ribbonAlignMenu') })
             }
-            onMouseDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              closeSiblingPanels(e, closePanels, 'arrange')
+            }}
             onClick={() => setArrangeOpen((v) => !v)}
           >
             <span className="rb-big-icon">
@@ -1008,12 +1140,12 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
             <div className="rb-drop rb-menu rb-menu-wide" onMouseDown={(e) => e.stopPropagation()}>
               {(
                 [
-                  ['left', <IconObjAlignLeft key="i" />, t('ribbonAlignLeft')],
-                  ['center-h', <IconObjAlignCenterH key="i" />, t('ribbonAlignCenterH')],
-                  ['right', <IconObjAlignRight key="i" />, t('ribbonAlignRight')],
-                  ['top', <IconObjAlignTop key="i" />, t('ribbonAlignTop')],
-                  ['center-v', <IconObjAlignMiddle key="i" />, t('ribbonAlignMiddle')],
-                  ['bottom', <IconObjAlignBottom key="i" />, t('ribbonAlignBottom')],
+                  ['left', <IconObjAlignLeft key="i" size={20} />, t('ribbonAlignLeft')],
+                  ['center-h', <IconObjAlignCenterH key="i" size={20} />, t('ribbonAlignCenterH')],
+                  ['right', <IconObjAlignRight key="i" size={20} />, t('ribbonAlignRight')],
+                  ['top', <IconObjAlignTop key="i" size={20} />, t('ribbonAlignTop')],
+                  ['center-v', <IconObjAlignMiddle key="i" size={20} />, t('ribbonAlignMiddle')],
+                  ['bottom', <IconObjAlignBottom key="i" size={20} />, t('ribbonAlignBottom')],
                 ] as const
               ).map(([kind, icon, label]) => (
                 <button
@@ -1030,8 +1162,16 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
               <div className="rb-menu-div" />
               {(
                 [
-                  ['distribute-h', <IconObjDistributeH key="i" />, t('ribbonDistributeH')],
-                  ['distribute-v', <IconObjDistributeV key="i" />, t('ribbonDistributeV')],
+                  [
+                    'distribute-h',
+                    <IconObjDistributeH key="i" size={20} />,
+                    t('ribbonDistributeH'),
+                  ],
+                  [
+                    'distribute-v',
+                    <IconObjDistributeV key="i" size={20} />,
+                    t('ribbonDistributeV'),
+                  ],
                 ] as const
               ).map(([kind, icon, label]) => (
                 <button
@@ -1065,7 +1205,9 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
                         onFlip(axis)
                       }}
                     >
-                      <span className="rb-menu-glyph">{axis === 'h' ? '⇋' : '⇅'}</span>
+                      <span className="rb-menu-glyph">
+                        {axis === 'h' ? <IconObjFlipH size={20} /> : <IconObjFlipV size={20} />}
+                      </span>
                       {label}
                     </button>
                   ))}

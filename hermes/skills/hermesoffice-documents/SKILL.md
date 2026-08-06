@@ -22,7 +22,7 @@ description: Produce and edit Word documents in HermesOffice Docs — block edit
 
 Flow for "write me a report / plan / memo":
 
-1. Read the sources (`genoffice_extract_text` on the referenced files, or
+1. Read the sources (`hermesoffice_extract_text` on the referenced files, or
    the in-app read tools).
 2. Pick the closest template from `templates/docs/` and follow its structure:
 
@@ -39,8 +39,8 @@ Flow for "write me a report / plan / memo":
 
 3. Replace every `[placeholder]` and italic guidance line with real
    content; keep the heading structure; delete the template note.
-4. Write the result as a **new** `.docx` (`genoffice_docx_create`), open it
-   with `genoffice_app_open_file`, and reply with the path.
+4. Write the result as a **new** `.docx` (`hermesoffice_docx_create`), open it
+   with `hermesoffice_app_open_file`, and reply with the path.
 
 ## Style
 

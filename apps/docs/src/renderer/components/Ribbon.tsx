@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import type { Editor } from '@tiptap/core'
+import type { ChainedCommands, Editor } from '@tiptap/core'
 import type { Command } from '@tiptap/pm/state'
 import {
   addColumnAfter,
@@ -27,15 +27,16 @@ import type {
   ThemeColors,
   ThemeFonts,
 } from '@hermesoffice/docx-engine'
-import { getActiveSubEditor } from '../editor/active-editor'
 import { HIGHLIGHT_CSS } from '../editor/extensions'
+import { setParagraphDirection, setSelectionAlign } from '../editor/direction'
 import { stepParagraphIndent } from '../editor/indent'
 import { formatNumber } from '../editor/numbering'
-import { effectiveSizeHalfPoints } from '../editor/text-style-resolve'
 import type { InkTool } from '../editor/ink'
+import type { RibbonFormatState } from './ribbon-format-state'
 import { setSelectedColumnWidth } from '../editor/table-sizing'
 import { useI18n, type StringKey } from '../i18n/locale'
-import { fontFamiliesFor } from '../font-list'
+import { fontFamiliesFor, isEastAsianFontName } from '../font-list'
+import { cssFontFamily } from '../line-metrics'
 import {
   DesignTab,
   DrawTab,
@@ -52,7 +53,7 @@ import {
 import { WRAP_OPTIONS } from './ContextMenu'
 import { CropDialog, CutoutDialog } from './PictureDialogs'
 import {
-  HermesMark,
+  GensparkMark,
   IconAlignCenter,
   IconAlignJustify,
   IconAlignLeft,
@@ -79,6 +80,8 @@ import {
   IconIndentDec,
   IconIndentInc,
   IconCrop,
+  IconDirLtr,
+  IconDirRtl,
   IconLineSpacing,
   IconMergeCells,
   IconNumbered,
@@ -102,6 +105,8 @@ interface RibbonProps {
   /** Right side of the tab row (file name, etc.) */
   trailingActions?: React.ReactNode
   editor: Editor
+  /** shallow-stable snapshot of every editor-state read shown in the ribbon (memo invalidation key) */
+  formatState: RibbonFormatState
   hasDoc: boolean
   blocks: Block[]
   /** Fallback when a new list can't reuse a numId (adopt a document definition / create one) */
@@ -112,8 +117,6 @@ interface RibbonProps {
   styles?: Map<string, StyleInfo>
   /** document-wide text defaults from styles.xml */
   docDefaults?: DocDefaults
-  /** Open the styles pane */
-  onStylesPanel?: () => void
   /** Open the paragraph dialog (line-spacing rule / exact value entry lives there) */
   onParagraphDialog?: () => void
   onOpen: () => void
@@ -133,6 +136,7 @@ interface RibbonProps {
   onWatermark: (text: string | null) => void
   themeFonts: ThemeFonts | null
   onThemeFonts: (fonts: ThemeFonts) => void
+  themeColors: ThemeColors | null
   onThemeColors: (colors: ThemeColors) => void
   /** Draw → pen / highlighter / eraser */
   inkTool: InkTool
@@ -257,7 +261,21 @@ const TAB_LABEL_KEYS: Record<string, StringKey> = {
 /** CSS px per cm at 96dpi (size inputs display in centimeters) */
 const PX_PER_CM = 96 / 2.54
 
-const FONT_SIZES = [9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 28, 36, 48, 72]
+/** Word's picture size limits in cm (0.01"–22") */
+export const PICTURE_CM_MIN = 0.03
+export const PICTURE_CM_MAX = 55.87
+export const clampPictureCm = (cm: number) => Math.min(PICTURE_CM_MAX, Math.max(PICTURE_CM_MIN, cm))
+
+/** swallows every command when the document is read-only (protected / read mode) */
+const NOOP_CHAIN = new Proxy(
+  {},
+  { get: (_t, prop) => (prop === 'run' ? () => false : () => NOOP_CHAIN) },
+) as ChainedCommands
+
+// Word's preset size list (also drives the grow/shrink font step buttons)
+const FONT_SIZES = [
+  5, 5.5, 6.5, 7.5, 8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72,
+]
 
 const THEME_COLORS: Array<{ nameKey: StringKey; hex: string }> = [
   { nameKey: 'ribbonColorWhite', hex: 'FFFFFF' },
@@ -434,9 +452,6 @@ function previewLevelText(levels: CustomNumberingLevel[], ilvl: number): string 
   )
 }
 
-/** Max character styles shown inline; the rest fold into the "More styles" dropdown */
-const MAX_INLINE_CHAR_STYLES = 2
-
 const STYLE_GALLERY = [
   { key: 'p', labelKey: 'ribbonStyleNormal', className: 'style-normal' },
   { key: 'h1', labelKey: 'ribbonStyleHeading1', className: 'style-h1' },
@@ -444,20 +459,31 @@ const STYLE_GALLERY = [
   { key: 'h3', labelKey: 'ribbonStyleHeading3', className: 'style-h3' },
 ] as const satisfies ReadonlyArray<{ key: string; labelKey: StringKey; className: string }>
 
-/** Fallback character styles shown when the document has no character styles */
-const CHAR_STYLE_PRESETS: Array<{ styleId: string; labelKey: StringKey; display: CSSProperties }> =
-  [
-    {
-      styleId: '__preset_emphasis',
-      labelKey: 'ribbonStyleEmphasis',
-      display: { fontStyle: 'italic', color: 'var(--theme-accent, #4472C4)' },
-    },
-    {
-      styleId: '__preset_strong',
-      labelKey: 'ribbonStyleIntenseEmphasis',
-      display: { fontWeight: 'bold', color: 'var(--theme-accent, #4472C4)' },
-    },
-  ]
+/** Fallback character styles shown when the document has no character styles.
+ * Emphasis = italic + accent color, Intense Emphasis = bold + accent color;
+ * applied via the plain italic/bold marks plus docTextStyle color. */
+const CHAR_STYLE_PRESETS: Array<{
+  styleId: string
+  labelKey: StringKey
+  mark: 'italic' | 'bold'
+  display: (accentHex: string) => CSSProperties
+}> = [
+  {
+    styleId: '__preset_emphasis',
+    labelKey: 'ribbonStyleEmphasis',
+    mark: 'italic',
+    display: (accentHex) => ({ fontStyle: 'italic', color: `#${accentHex}` }),
+  },
+  {
+    styleId: '__preset_strong',
+    labelKey: 'ribbonStyleIntenseEmphasis',
+    mark: 'bold',
+    display: (accentHex) => ({ fontWeight: 'bold', color: `#${accentHex}` }),
+  },
+]
+
+/** Theme accent used by the preset character styles when the doc theme has none */
+const DEFAULT_PRESET_ACCENT = '4472C4'
 
 function findNumIdOfKind(blocks: Block[], kind: 'bullet' | 'ordered'): string | null {
   for (const b of blocks) {
@@ -466,15 +492,15 @@ function findNumIdOfKind(blocks: Block[], kind: 'bullet' | 'ordered'): string | 
   return null
 }
 
-export function Ribbon({
+function RibbonInner({
   quickActions,
   trailingActions,
   editor,
+  formatState: fs,
   hasDoc,
   blocks,
   allocateNumId,
   createListDef,
-  onStylesPanel,
   onParagraphDialog,
   styles,
   docDefaults,
@@ -493,6 +519,7 @@ export function Ribbon({
   onWatermark,
   themeFonts,
   onThemeFonts,
+  themeColors,
   onThemeColors,
   inkTool,
   onInkTool,
@@ -556,9 +583,8 @@ export function Ribbon({
   onPagePreview,
 }: RibbonProps) {
   const { t, lang } = useI18n()
-  // The one-click AI actions need text to work on; grey them out on an empty
-  // document (App re-renders on every editor update, so this stays fresh).
-  const docEmpty = !hasDoc || editor.state.doc.textContent.trim() === ''
+  // The one-click AI actions need text to work on; grey them out on an empty document
+  const docEmpty = !hasDoc || fs.docEmpty
   const [tab, setTab] = useState<RibbonTab>('home')
   const [dropdown, setDropdown] = useState<string | null>(null)
   const [penColor, setPenColor] = useState('C00000')
@@ -597,10 +623,13 @@ export function Ribbon({
 
   // a focused textbox sub-editor receives text/paragraph formatting instead
   // of the main editor (Word: ribbon acts on the shape's text while inside it)
-  const sub = getActiveSubEditor()
+  const sub = fs.sub
   const ed = sub ?? editor
-  const chain = () => ed.chain().focus()
-  const inTable = !sub && isInTable(editor.state)
+  // read-only (Restrict Editing / Read Mode): every edit command is fenced here,
+  // button disabled states are only the visual layer on top
+  const canEdit = hasDoc && fs.editable
+  const chain = () => (canEdit ? ed.chain().focus() : NOOP_CHAIN)
+  const inTable = fs.inTable
 
   useEffect(() => {
     if (inTable && !wasInTable.current) {
@@ -619,9 +648,8 @@ export function Ribbon({
   }, [inTable])
 
   // ---- Picture Format (contextual tab when an image block is selected, same mechanism as tables) ----
-  const protAttrs = sub ? null : editor.getAttributes('docProtected')
-  const inImage = !sub && protAttrs?.blockType === 'image' && !!protAttrs.imageDataUrl
-  const imageDataUrl = inImage ? (protAttrs!.imageDataUrl as string) : null
+  const inImage = !sub && fs.imageSelected
+  const imageDataUrl = inImage ? fs.imageDataUrl : null
 
   useEffect(() => {
     if (inImage && !wasInImage.current) {
@@ -645,6 +673,7 @@ export function Ribbon({
    * Display size keeps the current width; height adapts to the new image's aspect ratio.
    */
   const applyPictureBytes = async (dataUrl: string) => {
+    if (!canEdit) return
     const m = /^data:(image\/(?:png|jpeg|gif));base64,(.*)$/s.exec(dataUrl)
     if (!m) return
     const attrs = editor.getAttributes('docProtected')
@@ -678,11 +707,12 @@ export function Ribbon({
 
   /** Set the image display size proportionally (cm input; either side drives the other) */
   const setPictureSizeCm = (dim: 'w' | 'h', cm: number) => {
+    if (!canEdit) return
     const attrs = editor.getAttributes('docProtected')
     const w = Number(attrs?.imageWidthPx)
     const h = Number(attrs?.imageHeightPx)
     if (attrs?.blockType !== 'image' || !w || !h || !(cm > 0)) return
-    const px = cm * PX_PER_CM
+    const px = clampPictureCm(cm) * PX_PER_CM
     const next =
       dim === 'w'
         ? {
@@ -698,6 +728,7 @@ export function Ribbon({
 
   /** Reset to the image's natural size (shrunk to 620px when exceeding body width, matching insertion) */
   const resetPictureSize = async () => {
+    if (!canEdit) return
     const attrs = editor.getAttributes('docProtected')
     const url = attrs?.imageDataUrl as string | null
     if (attrs?.blockType !== 'image' || !url) return
@@ -718,6 +749,7 @@ export function Ribbon({
   }
 
   const runTableCommand = (command: Command) => {
+    if (!canEdit) return
     editor.view.focus()
     command(editor.state, editor.view.dispatch)
   }
@@ -735,7 +767,7 @@ export function Ribbon({
   type BorderSide = { style: string; szEighths?: number; color?: string }
   /** Apply borders to selected cells: all/outer/inner compute the four sides per cell from selection geometry; none clears explicitly */
   const applyCellBorders = (mode: 'all' | 'outer' | 'inner' | 'none') => {
-    if (!isInTable(editor.state)) return
+    if (!canEdit || !isInTable(editor.state)) return
     editor.view.focus()
     const { state, view } = editor
     const rect = selectedRect(state)
@@ -775,7 +807,7 @@ export function Ribbon({
 
   /** Set row height for selected rows (cm; 0/empty = clear) */
   const applyRowHeight = (cm: number | null) => {
-    if (!isInTable(editor.state)) return
+    if (!canEdit || !isInTable(editor.state)) return
     editor.view.focus()
     const { state, view } = editor
     const rect = selectedRect(state)
@@ -793,115 +825,25 @@ export function Ribbon({
 
   /** Set column width for selected columns (cm): writes the matching colwidth slot of every cell in the column */
   const applyColumnWidth = (cm: number | null) => {
-    if (!isInTable(editor.state) || !cm || cm <= 0) return
+    if (!canEdit || !isInTable(editor.state) || !cm || cm <= 0) return
     editor.view.focus()
     const px = Math.round((cm / 2.54) * 96)
     setSelectedColumnWidth(px, sectionContentWidthPx)(editor.state, editor.view.dispatch)
   }
 
   /** Current cell properties (echoed in the size inputs) */
-  const activeCellInfo = (() => {
-    if (!inTable) return null
-    try {
-      const rect = selectedRect(editor.state)
-      const rowNode = rect.table.maybeChild(rect.top)
-      const cellPos = rect.map.map[rect.top * rect.map.width + rect.left]
-      const cellNode = editor.state.doc.nodeAt(rect.tableStart + cellPos)
-      const colwidth = (cellNode?.attrs.colwidth as number[] | null) ?? null
-      return {
-        key: rect.tableStart * 100000 + cellPos,
-        heightCm: rowNode?.attrs.heightTwips
-          ? ((rowNode.attrs.heightTwips as number) / 1440) * 2.54
-          : null,
-        widthCm: colwidth?.[0] ? (colwidth[0] / 96) * 2.54 : null,
-        vAlign: (cellNode?.attrs.vAlign as string | null) ?? null,
-      }
-    } catch {
-      return null
-    }
-  })()
-
-  const textAttrs = ed.getAttributes('docTextStyle')
-  const activeCharStyleId = (textAttrs.styleId as string | null) ?? null
-  const activeStyleKey = editor.isActive('docHeading')
-    ? `h${editor.getAttributes('docHeading').level ?? 1}`
-    : activeCharStyleId
-      ? `char:${activeCharStyleId}`
-      : 'p'
-  const currentSize = (effectiveSizeHalfPoints(ed, styles, docDefaults) ?? 22) / 2
-  const currentFont = (textAttrs.font as string | null) ?? ''
-  // The "(Body)" entry means "no explicit run font — inherit the document's body
-  // font", so it has to name that font rather than a fixed one: docDefaults is what
-  // actually renders, the theme's minor font is what "+Body" resolves to.
-  const bodyFontName = docDefaults?.asciiFont?.trim() || themeFonts?.minor?.trim() || 'Calibri'
-  const paraAttrs = sub
-    ? ed.getAttributes('docParagraph')
-    : editor.isActive('docHeading')
-      ? editor.getAttributes('docHeading')
-      : editor.isActive('docListItem')
-        ? editor.getAttributes('docListItem')
-        : editor.getAttributes('docParagraph')
-  const activeAlign = (paraAttrs.align as string | null) ?? 'left'
-  const activeSpacing = paraAttrs.lineSpacing as number | null
-
-  /** merge new attrs into the docTextStyle mark, preserving the rest.
-   * Only the patch is passed: setMark merges per existing mark and with the caret's
-   * stored mark. Rebuilding from getAttributes read-back dropped the previous call's
-   * value on a collapsed cursor (stored-mark changes don't re-render). */
-  const setTextStyle = (patch: Record<string, unknown>) => {
-    chain().setMark('docTextStyle', patch).run()
-    setDropdown(null)
-  }
-
-  /** apply paragraph-level attrs to every block type in the selection */
-  const setParaAttr = (attrs: Record<string, unknown>) => {
-    if (sub) {
-      // textbox paragraphs only support alignment; other keys are ignored
-      chain().updateAttributes('docParagraph', attrs).run()
-      setDropdown(null)
-      return
-    }
-    let c = chain()
-      .updateAttributes('docParagraph', attrs)
-      .updateAttributes('docHeading', attrs)
-      .updateAttributes('docListItem', attrs)
-    // alignment also applies to selected images (w:jc on the image paragraph)
-    if ('align' in attrs) {
-      c = c.updateAttributes('docProtected', { imageAlign: attrs.align ?? null })
-    }
-    c.run()
-    setDropdown(null)
-  }
-
-  const applyStyle = (key: string) => {
-    if (key.startsWith('char:')) {
-      const styleId = key.slice(5)
-      // Toggle: if already active, remove the mark; else set it
-      if (activeCharStyleId === styleId) {
-        chain().unsetMark('docTextStyle').run()
-      } else {
-        // Apply preset visual attrs for the two built-in presets, otherwise just styleId
-        if (styleId === '__preset_emphasis') {
-          chain()
-            .setMark('docTextStyle', { styleId: null, color: null, bold: null, italic: true })
-            .run()
-        } else if (styleId === '__preset_strong') {
-          chain()
-            .setMark('docTextStyle', { styleId: null, color: null, bold: true, italic: null })
-            .run()
-        } else {
-          chain().setMark('docTextStyle', { styleId }).run()
+  const activeCellInfo =
+    fs.cellKey === null
+      ? null
+      : {
+          key: fs.cellKey,
+          heightCm: fs.cellHeightCm,
+          widthCm: fs.cellWidthCm,
+          vAlign: fs.cellVAlign,
         }
-      }
-      return
-    }
-    if (sub) return // textboxes have no heading styles
-    if (key === 'p') chain().setNode('docParagraph').run()
-    else
-      chain()
-        .setNode('docHeading', { level: Number(key.slice(1)) })
-        .run()
-  }
+
+  const activeCharStyleId = fs.charStyleId
+  const presetAccent = themeColors?.accent1?.trim().toUpperCase() || DEFAULT_PRESET_ACCENT
 
   /**
    * Character styles shown in the gallery.
@@ -932,9 +874,201 @@ export function Ribbon({
       return CHAR_STYLE_PRESETS.map((p) => ({
         key: `char:${p.styleId}`,
         label: t(p.labelKey),
-        previewStyle: p.display as CSSProperties,
+        previewStyle: p.display(presetAccent),
       }))
     })()
+
+  // Presets carry no styleId (they apply plain italic/bold + accent color), so
+  // detect their active state from the format state instead of charStyleId.
+  const usingPresetFallback = charStyleItems[0]?.key === `char:${CHAR_STYLE_PRESETS[0].styleId}`
+  const presetActive = (mark: 'italic' | 'bold'): boolean =>
+    usingPresetFallback &&
+    !activeCharStyleId &&
+    (mark === 'italic' ? fs.italic : fs.bold) &&
+    (fs.textColor ?? '').toUpperCase() === presetAccent
+  const activeStyleKey =
+    fs.headingLevel !== null
+      ? `h${fs.headingLevel}`
+      : activeCharStyleId
+        ? `char:${activeCharStyleId}`
+        : presetActive('bold')
+          ? 'char:__preset_strong'
+          : presetActive('italic')
+            ? 'char:__preset_emphasis'
+            : 'p'
+
+  // Style gallery overflow: the inline row clips (the ribbon row cannot grow),
+  // so a "more styles" expander must appear whenever cards are cut off.
+  const styleGalleryRef = useRef<HTMLDivElement | null>(null)
+  const [styleGalleryOverflow, setStyleGalleryOverflow] = useState(false)
+  useLayoutEffect(() => {
+    const el = styleGalleryRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const check = () => setStyleGalleryOverflow(el.scrollWidth - el.clientWidth > 1)
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+    // scrollWidth changes don't fire the observer: re-check when the card set can change
+  }, [tab, charStyleItems.length, lang])
+
+  const currentSize = fs.fontSizePt
+  const currentFont = fs.fontFamily
+  // The "(Body)" entry means "no explicit run font — inherit the document's body
+  // font", so it has to name that font rather than a fixed one: docDefaults is what
+  // actually renders, the theme's minor font is what "+Body" resolves to.
+  const bodyFontName = docDefaults?.asciiFont?.trim() || themeFonts?.minor?.trim() || 'Calibri'
+  // computed unconditionally (not inside the dropdown render): cheap, and the
+  // render-isolation test uses fontFamiliesFor calls as its render probe
+  const fontFamilies = fontFamiliesFor(lang)
+  // unset align follows the paragraph direction: start is left in LTR, right in RTL
+  const activeAlign = fs.align ?? (fs.bidi ? 'right' : 'left')
+  const activeSpacing = fs.lineSpacing
+
+  /** merge new attrs into the docTextStyle mark, preserving the rest.
+   * Only the patch is passed: setMark merges per existing mark and with the caret's
+   * stored mark. Rebuilding from getAttributes read-back dropped the previous call's
+   * value on a collapsed cursor (stored-mark changes don't re-render). */
+  const setTextStyle = (patch: Record<string, unknown>) => {
+    chain().setMark('docTextStyle', patch).run()
+    setDropdown(null)
+  }
+
+  /** font picks target only their script's rFonts slot (Word never flattens the other one) */
+  const setFont = (name: string | null) => {
+    if (!name) setTextStyle({ font: null, fontAscii: null })
+    else if (isEastAsianFontName(name)) setTextStyle({ font: name })
+    else setTextStyle({ fontAscii: name })
+  }
+
+  /** apply paragraph-level attrs to every block type in the selection */
+  const setParaAttr = (attrs: Record<string, unknown>) => {
+    if (sub) {
+      // textbox paragraphs only support alignment; other keys are ignored
+      chain().updateAttributes('docParagraph', attrs).run()
+      setDropdown(null)
+      return
+    }
+    let c = chain()
+      .updateAttributes('docParagraph', attrs)
+      .updateAttributes('docHeading', attrs)
+      .updateAttributes('docListItem', attrs)
+    // alignment also applies to selected images (w:jc on the image paragraph)
+    if ('align' in attrs) {
+      c = c.updateAttributes('docProtected', { imageAlign: attrs.align ?? null })
+    }
+    c.run()
+    setDropdown(null)
+  }
+
+  const applyStyle = (key: string) => {
+    if (key.startsWith('char:')) {
+      const styleId = key.slice(5)
+      const preset = CHAR_STYLE_PRESETS.find((p) => p.styleId === styleId)
+      if (preset) {
+        // Presets are plain italic/bold marks + accent color; toggle off when already active
+        if (activeStyleKey === key) {
+          chain().unsetMark(preset.mark).setMark('docTextStyle', { color: null }).run()
+        } else {
+          // switching presets must drop the other's mark, otherwise both stay
+          // active and the gallery highlight sticks on the wrong card
+          let c = chain()
+          for (const p of CHAR_STYLE_PRESETS) if (p !== preset) c = c.unsetMark(p.mark)
+          c.setMark(preset.mark).setMark('docTextStyle', { color: presetAccent }).run()
+        }
+        return
+      }
+      // Toggle: if already active, remove the mark; else set it
+      if (activeCharStyleId === styleId) {
+        chain().unsetMark('docTextStyle').run()
+      } else {
+        chain().setMark('docTextStyle', { styleId }).run()
+      }
+      return
+    }
+    if (sub) return // textboxes have no heading styles
+    let c = chain()
+    if (key === 'p') c = c.setNode('docParagraph')
+    else c = c.setNode('docHeading', { level: Number(key.slice(1)) })
+    // Word-like: applying a paragraph style sheds the runs' direct font/size/color.
+    // Those render as inline span styles and would otherwise mask the style's look
+    // entirely (the click would seem to do nothing on documents whose body runs
+    // carry explicit rPr, common in CJK templates).
+    c.command(({ tr }) => {
+      const { from, to } = tr.selection
+      let start = from
+      let end = to
+      tr.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.isTextblock) {
+          start = Math.min(start, pos + 1)
+          end = Math.max(end, pos + node.nodeSize - 1)
+        }
+      })
+      const type = editor.schema.marks.docTextStyle
+      const jobs: Array<{ from: number; to: number; attrs: Record<string, unknown> | null }> = []
+      tr.doc.nodesBetween(start, end, (node, pos) => {
+        if (!node.isText) return
+        const m = node.marks.find((mm) => mm.type === type)
+        if (!m) return
+        if (
+          m.attrs.color == null &&
+          m.attrs.sizeHalfPoints == null &&
+          m.attrs.font == null &&
+          m.attrs.fontAscii == null
+        )
+          return
+        const attrs = { ...m.attrs, color: null, sizeHalfPoints: null, font: null, fontAscii: null }
+        const keep = Object.values(attrs).some((v) => v !== null)
+        jobs.push({
+          from: Math.max(pos, start),
+          to: Math.min(pos + node.nodeSize, end),
+          attrs: keep ? attrs : null,
+        })
+      })
+      for (const job of jobs) {
+        tr.removeMark(job.from, job.to, type)
+        if (job.attrs) tr.addMark(job.from, job.to, type.create(job.attrs))
+      }
+      return true
+    }).run()
+  }
+
+  /** Style cards, shared by the inline gallery and its overflow menu */
+  const renderStyleCards = (inMenu: boolean) => {
+    const apply = (key: string) => {
+      applyStyle(key)
+      if (inMenu) setDropdown(null)
+    }
+    return (
+      <>
+        {STYLE_GALLERY.map((s) => (
+          <button
+            key={s.key}
+            className={`style-card ${activeStyleKey === s.key ? 'active' : ''}`}
+            disabled={!canEdit || !!sub}
+            onClick={() => apply(s.key)}
+          >
+            <span className={`style-card-preview ${s.className}`}>{t('ribbonStylePreview')}</span>
+            <span className="style-card-label">{t(s.labelKey)}</span>
+          </button>
+        ))}
+        {charStyleItems.map((s) => (
+          <button
+            key={s.key}
+            className={`style-card style-card-char ${activeStyleKey === s.key ? 'active' : ''}`}
+            disabled={!canEdit}
+            title={s.label}
+            onClick={() => apply(s.key)}
+          >
+            <span className="style-card-preview" style={s.previewStyle}>
+              Aa
+            </span>
+            <span className="style-card-label">{s.label}</span>
+          </button>
+        ))}
+      </>
+    )
+  }
 
   const toggleList = (kind: 'bullet' | 'ordered') => {
     if (sub) return // textboxes have no list numbering
@@ -960,7 +1094,7 @@ export function Ribbon({
   }
 
   const changeIndent = (delta: 1 | -1) => {
-    if (sub) return
+    if (sub || !canEdit) return
     stepParagraphIndent(editor, delta)
   }
 
@@ -980,7 +1114,7 @@ export function Ribbon({
   }
 
   const toggleVertAlign = (kind: 'superscript' | 'subscript') => {
-    setTextStyle({ vertAlign: textAttrs.vertAlign === kind ? null : kind })
+    setTextStyle({ vertAlign: fs.vertAlign === kind ? null : kind })
   }
 
   /** format painter: pick up formatting now, apply to the next selection */
@@ -989,16 +1123,18 @@ export function Ribbon({
       setPainter(null)
       return
     }
+    if (!canEdit) return
     const marks = editor.state.selection.$head
       .marks()
       .map((m) => ({ type: m.type.name, attrs: { ...m.attrs } }))
     setPainter({
       marks,
       para: {
-        align: paraAttrs.align ?? null,
-        lineSpacing: paraAttrs.lineSpacing ?? null,
-        shadingFill: paraAttrs.shadingFill ?? null,
-        borders: paraAttrs.borders ?? null,
+        align: fs.align,
+        lineSpacing: fs.lineSpacing,
+        shadingFill: fs.shadingFill,
+        borders: fs.paraBorders ?? null,
+        bidi: fs.bidi,
       },
     })
   }
@@ -1010,7 +1146,7 @@ export function Ribbon({
     let keyboardTimer: ReturnType<typeof setTimeout> | null = null
 
     const applyFinalSelection = () => {
-      if (finished) return
+      if (finished || !editor.isEditable) return
       const { from, to } = editor.state.selection
       if (from === to) return
       finished = true
@@ -1052,6 +1188,7 @@ export function Ribbon({
   }, [painter, editor])
 
   const changeCase = (mode: 'upper' | 'lower' | 'title' | 'sentence') => {
+    if (!canEdit) return
     const { from, to } = ed.state.selection
     if (from === to) return
     ed.chain()
@@ -1078,6 +1215,7 @@ export function Ribbon({
   }
 
   const clipboard = async (action: 'cut' | 'copy' | 'paste') => {
+    if (action !== 'copy' && !canEdit) return
     if (action === 'paste') {
       const text = await navigator.clipboard.readText()
       if (text) chain().insertContent(text).run()
@@ -1087,12 +1225,12 @@ export function Ribbon({
     }
   }
 
-  const markBtn = (name: string, title: string, label: ReactNode, onClick?: () => void) => (
+  const markBtn = (name: string, active: boolean, title: string, label: ReactNode) => (
     <button
-      className={`rb-icon ${ed.isActive(name) ? 'active' : ''}`}
-      disabled={!hasDoc}
+      className={`rb-icon ${active ? 'active' : ''}`}
+      disabled={!canEdit}
       title={title}
-      onClick={onClick ?? (() => chain().toggleMark(name).run())}
+      onClick={() => chain().toggleMark(name).run()}
     >
       {label}
     </button>
@@ -1196,6 +1334,7 @@ export function Ribbon({
               <div className="ribbon-group-items">
                 <button
                   className="rb-big"
+                  disabled={!canEdit}
                   title={t('ribbonRemoveBgTip')}
                   onClick={() => setPictureDialog('cutout')}
                 >
@@ -1206,6 +1345,7 @@ export function Ribbon({
                 </button>
                 <button
                   className="rb-big"
+                  disabled={!canEdit}
                   title={t('ribbonCropTip')}
                   onClick={() => setPictureDialog('crop')}
                 >
@@ -1216,6 +1356,7 @@ export function Ribbon({
                 </button>
                 <button
                   className="rb-big"
+                  disabled={!canEdit}
                   title={t('ribbonReplacePictureTip')}
                   onClick={() => void replacePicture()}
                 >
@@ -1233,15 +1374,17 @@ export function Ribbon({
               <div className="table-tool-row">
                 <select
                   className="rb-select"
+                  disabled={!canEdit}
                   title={t('ribbonWrapText')}
-                  value={(protAttrs?.imageWrap as string | null) ?? ''}
-                  onChange={(e) =>
+                  value={fs.imageWrap ?? ''}
+                  onChange={(e) => {
+                    if (!canEdit) return
                     editor
                       .chain()
                       .focus()
                       .updateAttributes('docProtected', { imageWrap: e.target.value || null })
                       .run()
-                  }
+                  }}
                 >
                   {WRAP_OPTIONS.map((opt) => (
                     <option key={String(opt.value)} value={opt.value ?? ''}>
@@ -1261,12 +1404,14 @@ export function Ribbon({
                   <button
                     key={value}
                     className={
-                      ((protAttrs?.imageAlign as string | null) ?? 'left') === value
+                      (fs.imageAlign ?? 'left') === value
                         ? 'table-tool-button active'
                         : 'table-tool-button'
                     }
+                    disabled={!canEdit}
                     title={label}
-                    onClick={() =>
+                    onClick={() => {
+                      if (!canEdit) return
                       editor
                         .chain()
                         .focus()
@@ -1274,7 +1419,7 @@ export function Ribbon({
                           imageAlign: value === 'left' ? null : value,
                         })
                         .run()
-                    }
+                    }}
                   >
                     {icon}
                   </button>
@@ -1287,18 +1432,17 @@ export function Ribbon({
             <div className="table-tool-group">
               <div
                 className="table-tool-row table-size-inputs"
-                key={`${protAttrs?.imageWidthPx ?? ''}x${protAttrs?.imageHeightPx ?? ''}`}
+                key={`${fs.imageWidthPx ?? ''}x${fs.imageHeightPx ?? ''}`}
               >
                 <label>
                   {t('ribbonPicHeight')}
                   <input
                     type="number"
-                    min={0}
+                    min={PICTURE_CM_MIN}
+                    max={PICTURE_CM_MAX}
                     step={0.1}
                     defaultValue={
-                      protAttrs?.imageHeightPx
-                        ? (Number(protAttrs.imageHeightPx) / PX_PER_CM).toFixed(2)
-                        : ''
+                      fs.imageHeightPx !== null ? (fs.imageHeightPx / PX_PER_CM).toFixed(2) : ''
                     }
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -1308,9 +1452,7 @@ export function Ribbon({
                     }}
                     onBlur={(e) => {
                       const v = parseFloat(e.target.value)
-                      const cur = protAttrs?.imageHeightPx
-                        ? Number(protAttrs.imageHeightPx) / PX_PER_CM
-                        : null
+                      const cur = fs.imageHeightPx !== null ? fs.imageHeightPx / PX_PER_CM : null
                       if (
                         Number.isFinite(v) &&
                         v > 0 &&
@@ -1326,12 +1468,11 @@ export function Ribbon({
                   {t('ribbonPicWidth')}
                   <input
                     type="number"
-                    min={0}
+                    min={PICTURE_CM_MIN}
+                    max={PICTURE_CM_MAX}
                     step={0.1}
                     defaultValue={
-                      protAttrs?.imageWidthPx
-                        ? (Number(protAttrs.imageWidthPx) / PX_PER_CM).toFixed(2)
-                        : ''
+                      fs.imageWidthPx !== null ? (fs.imageWidthPx / PX_PER_CM).toFixed(2) : ''
                     }
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -1341,9 +1482,7 @@ export function Ribbon({
                     }}
                     onBlur={(e) => {
                       const v = parseFloat(e.target.value)
-                      const cur = protAttrs?.imageWidthPx
-                        ? Number(protAttrs.imageWidthPx) / PX_PER_CM
-                        : null
+                      const cur = fs.imageWidthPx !== null ? fs.imageWidthPx / PX_PER_CM : null
                       if (
                         Number.isFinite(v) &&
                         v > 0 &&
@@ -1511,17 +1650,11 @@ export function Ribbon({
             <div className="ribbon-sep" />
             <div className="table-tool-group">
               <div className="table-tool-row">
-                <button
-                  disabled={!mergeCells(editor.state)}
-                  onClick={() => runTableCommand(mergeCells)}
-                >
+                <button disabled={!fs.canMergeCells} onClick={() => runTableCommand(mergeCells)}>
                   <IconMergeCells />
                   {t('ribbonMergeCells')}
                 </button>
-                <button
-                  disabled={!splitCell(editor.state)}
-                  onClick={() => runTableCommand(splitCell)}
-                >
+                <button disabled={!fs.canSplitCell} onClick={() => runTableCommand(splitCell)}>
                   <IconSplitCells />
                   {t('ribbonSplitCells')}
                 </button>
@@ -1639,7 +1772,7 @@ export function Ribbon({
           </div>
         ) : tab === 'home' ? (
           <>
-            {/* ---- Hermes AI (first slot: entry + one-click AI actions) ---- */}
+            {/* ---- Genspark AI (first slot: entry + one-click AI actions) ---- */}
             <div className="ribbon-group">
               <div className="ribbon-group-items">
                 <button
@@ -1648,9 +1781,9 @@ export function Ribbon({
                   onClick={onToggleAi}
                 >
                   <span className="rb-big-icon">
-                    <HermesMark size={26} />
+                    <GensparkMark size={26} />
                   </span>
-                  <span>Hermes AI</span>
+                  <span>Genspark AI</span>
                 </button>
                 <button
                   className="rb-big ai-entry"
@@ -1668,8 +1801,17 @@ export function Ribbon({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       >
-                        <rect x="4.5" y="3.5" width="15" height="17" rx="2" />
-                        <path d="M8 8.5h8M8 12h8M8 15.5h4.5" strokeLinecap="round" />
+                        <path
+                          d="M13.875 21H12H6.5C5.39543 21 4.5 20.1046 4.5 19V5C4.5 3.89543 5.39543 3 6.5 3H17.5C18.6046 3 19.5 3.89543 19.5 5V9V12V13"
+                          strokeLinecap="round"
+                        />
+                        <path d="M8.00001 7H16" strokeLinecap="round" />
+                        <path d="M8.00007 10.2032H14.0001" strokeLinecap="round" />
+                        <path d="M8.00007 13.4062H12.0001" strokeLinecap="round" />
+                        <path
+                          d="M17 14L17.2579 14.697C17.5961 15.611 17.7652 16.068 18.0986 16.4014C18.432 16.7348 18.889 16.9039 19.803 17.2421L20.5 17.5L19.803 17.7579C18.889 18.0961 18.432 18.2652 18.0986 18.5986C17.7652 18.932 17.5961 19.389 17.2579 20.303L17 21L16.7421 20.303C16.4039 19.389 16.2348 18.932 15.9014 18.5986C15.568 18.2652 15.111 18.0961 14.197 17.7579L13.5 17.5L14.197 17.2421C15.111 16.9039 15.568 16.7348 15.9014 16.4014C16.2348 16.068 16.4039 15.611 16.7421 14.697L17 14Z"
+                          strokeLinejoin="round"
+                        />
                       </svg>
                     </span>
                   </span>
@@ -1692,22 +1834,50 @@ export function Ribbon({
                         strokeLinejoin="round"
                       >
                         <path
-                          d="M5 19l9.5-9.5a2.1 2.1 0 0 1 3 3L8 22l-4 1 1-4Z"
+                          d="M5.00012 20.7481L8.80319 20.7482L21.7482 7.80317L17.945 4L5 16.945L5.00012 20.7481Z"
                           strokeLinejoin="round"
-                          transform="translate(1.5 -3.5)"
                         />
+                        <path d="M15.1406 6.80469L18.9438 10.6079" />
                         <path
-                          d="M5 5.5 5.6 7.4 7.5 8 5.6 8.6 5 10.5 4.4 8.6 2.5 8l1.9-.6L5 5.5Z"
-                          fill="currentColor"
-                          stroke="none"
+                          d="M8 3L8.22106 3.59745C8.51094 4.38087 8.65589 4.77259 8.94166 5.05833C9.22743 5.34409 9.61914 5.48903 10.4026 5.77893L11 6L10.4026 6.22107C9.61914 6.51097 9.22743 6.65592 8.94166 6.94167C8.65589 7.22741 8.51094 7.61913 8.22106 8.40255L8 9L7.77894 8.40255C7.48906 7.61913 7.34411 7.22741 7.05834 6.94167C6.77257 6.65592 6.38086 6.51097 5.59743 6.22107L5 6L5.59743 5.77893C6.38086 5.48903 6.77257 5.34409 7.05834 5.05833C7.34411 4.77259 7.48906 4.38087 7.77894 3.59745L8 3Z"
+                          strokeLinejoin="round"
                         />
                       </svg>
                     </span>
                   </span>
                   <span>{t('aiPolishBtn')}</span>
                 </button>
+                <button
+                  className="rb-big ai-entry"
+                  disabled={docEmpty}
+                  title={t('aiTidyPrompt')}
+                  onClick={() => onAiPreset(t('aiTidyPrompt'))}
+                >
+                  <span className="rb-big-icon">
+                    <span className="ai-feature-icon" aria-hidden="true">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M4 5H20" strokeLinecap="round" />
+                        <path d="M4 9H16" strokeLinecap="round" />
+                        <path d="M4 13H11" strokeLinecap="round" />
+                        <path d="M4 17H10" strokeLinecap="round" />
+                        <path
+                          d="M17 14L17.2579 14.697C17.5961 15.611 17.7652 16.068 18.0986 16.4014C18.432 16.7348 18.889 16.9039 19.803 17.2421L20.5 17.5L19.803 17.7579C18.889 18.0961 18.432 18.2652 18.0986 18.5986C17.7652 18.932 17.5961 19.389 17.2579 20.303L17 21L16.7421 20.303C16.4039 19.389 16.2348 18.932 15.9014 18.5986C15.568 18.2652 15.111 18.0961 14.197 17.7579L13.5 17.5L14.197 17.2421C15.111 16.9039 15.568 16.7348 15.9014 16.4014C16.2348 16.068 16.4039 15.611 16.7421 14.697L17 14Z"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
+                  </span>
+                  <span>{t('aiTidyBtn')}</span>
+                </button>
               </div>
-              <div className="ribbon-group-label">Hermes AI</div>
+              <div className="ribbon-group-label">Genspark AI</div>
             </div>
 
             <div className="ribbon-sep" />
@@ -1717,7 +1887,7 @@ export function Ribbon({
               <div className="ribbon-group-items">
                 <button
                   className="rb-big"
-                  disabled={!hasDoc}
+                  disabled={!canEdit}
                   onClick={() => void clipboard('paste')}
                 >
                   <span className="rb-big-icon">
@@ -1728,7 +1898,7 @@ export function Ribbon({
                 <div className="rb-col">
                   <button
                     className="rb-small"
-                    disabled={!hasDoc}
+                    disabled={!canEdit}
                     title={t('ribbonCutTip')}
                     onClick={() => void clipboard('cut')}
                   >
@@ -1744,7 +1914,7 @@ export function Ribbon({
                   </button>
                   <button
                     className={`rb-small ${painter ? 'active' : ''}`}
-                    disabled={!hasDoc || !!sub}
+                    disabled={!canEdit || !!sub}
                     title={painter ? t('ribbonPainterActiveTip') : t('ribbonPainterTip')}
                     onClick={togglePainter}
                   >
@@ -1761,66 +1931,106 @@ export function Ribbon({
             <div className="ribbon-group">
               <div className="ribbon-group-items rb-font-group">
                 <div className="rb-row">
-                  {/* Editable comboboxes (input+datalist): real documents use fonts and sizes
-                      outside any fixed list (GB/T 9704 fonts, half sizes like 13.5pt) */}
-                  <input
-                    className="rb-select rb-font-family"
-                    list="rb-font-family-options"
-                    disabled={!hasDoc}
-                    key={`f:${currentFont}:${hasDoc}`}
-                    defaultValue={currentFont}
-                    placeholder={t('ribbonFontBodyNamed', { font: bodyFontName })}
-                    title={t('ribbonFontFamilyTip')}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                    }}
-                    onChange={(e) => {
-                      // Chromium marks a datalist pick as insertReplacementText: apply right away
-                      const it = (e.nativeEvent as InputEvent).inputType
-                      if (it === 'insertReplacementText') (e.target as HTMLInputElement).blur()
-                    }}
-                    onBlur={(e) => {
-                      const v = e.target.value.trim()
-                      if (v !== currentFont) setTextStyle({ font: v || null })
-                    }}
-                  />
-                  <datalist id="rb-font-family-options">
-                    {fontFamiliesFor(lang)
-                      .filter((f) => f !== bodyFontName)
-                      .map((f) => (
-                        <option key={f} value={f} />
-                      ))}
-                  </datalist>
-                  <input
-                    className="rb-select rb-font-size"
-                    type="number"
-                    list="rb-font-size-options"
-                    min={1}
-                    max={1638}
-                    step={0.5}
-                    disabled={!hasDoc}
-                    key={`s:${currentSize}:${hasDoc}`}
-                    defaultValue={currentSize}
-                    title={t('ribbonFontSizeTip')}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                    }}
-                    onBlur={(e) => {
-                      const v = Number(e.target.value)
-                      if (!Number.isFinite(v) || v <= 0) return
-                      const half = Math.round(Math.min(1638, Math.max(1, v)) * 2)
-                      if (half !== Math.round(currentSize * 2))
-                        setTextStyle({ sizeHalfPoints: half })
-                    }}
-                  />
-                  <datalist id="rb-font-size-options">
-                    {FONT_SIZES.map((s) => (
-                      <option key={s} value={s} />
-                    ))}
-                  </datalist>
+                  {/* Editable combobox (free-typed input + full preset dropdown): real
+                      documents use fonts and sizes outside any fixed list (GB/T 9704
+                      fonts, half sizes like 13.5pt) */}
+                  <div className="rb-split-wrap">
+                    <input
+                      className="rb-select rb-font-family"
+                      disabled={!canEdit}
+                      key={`f:${currentFont}:${hasDoc}`}
+                      defaultValue={currentFont}
+                      placeholder={t('ribbonFontBodyNamed', { font: bodyFontName })}
+                      title={t('ribbonFontFamilyTip')}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                      }}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim()
+                        if (v !== currentFont) setFont(v || null)
+                      }}
+                    />
+                    <button
+                      className="rb-caret rb-combo-caret"
+                      disabled={!canEdit}
+                      title={t('ribbonFontFamilyTip')}
+                      onClick={() => setDropdown((v) => (v === 'fontFamily' ? null : 'fontFamily'))}
+                    >
+                      <IconCaret />
+                    </button>
+                    {dropdown === 'fontFamily' && (
+                      <div className="spacing-menu rb-font-family-menu">
+                        <button
+                          className={!currentFont ? 'active' : ''}
+                          style={{ fontFamily: cssFontFamily(bodyFontName) }}
+                          onClick={() => setFont(null)}
+                        >
+                          {t('ribbonFontBodyNamed', { font: bodyFontName })}
+                        </button>
+                        {fontFamilies
+                          .filter((f) => f !== bodyFontName)
+                          .map((f) => (
+                            <button
+                              key={f}
+                              className={f === currentFont ? 'active' : ''}
+                              style={{ fontFamily: cssFontFamily(f) }}
+                              onClick={() => setFont(f)}
+                            >
+                              {f}
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="rb-split-wrap">
+                    <input
+                      className="rb-select rb-font-size"
+                      type="number"
+                      min={1}
+                      max={1638}
+                      step={0.5}
+                      disabled={!canEdit}
+                      key={`s:${currentSize}:${hasDoc}`}
+                      defaultValue={currentSize}
+                      title={t('ribbonFontSizeTip')}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                      }}
+                      onBlur={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v) || v <= 0) return
+                        const half = Math.round(Math.min(1638, Math.max(1, v)) * 2)
+                        if (half !== Math.round(currentSize * 2))
+                          setTextStyle({ sizeHalfPoints: half })
+                      }}
+                    />
+                    <button
+                      className="rb-caret rb-combo-caret"
+                      disabled={!canEdit}
+                      title={t('ribbonFontSizeTip')}
+                      onClick={() => setDropdown((v) => (v === 'fontSize' ? null : 'fontSize'))}
+                    >
+                      <IconCaret />
+                    </button>
+                    {dropdown === 'fontSize' && (
+                      <div className="spacing-menu rb-font-size-menu">
+                        {FONT_SIZES.map((s) => (
+                          <button
+                            key={s}
+                            className={
+                              Math.round(s * 2) === Math.round(currentSize * 2) ? 'active' : ''
+                            }
+                            onClick={() => setTextStyle({ sizeHalfPoints: Math.round(s * 2) })}
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <button
                     className="rb-icon"
-                    disabled={!hasDoc}
+                    disabled={!canEdit}
                     title={t('ribbonGrowFont')}
                     onClick={() => stepFontSize(1)}
                   >
@@ -1828,7 +2038,7 @@ export function Ribbon({
                   </button>
                   <button
                     className="rb-icon"
-                    disabled={!hasDoc}
+                    disabled={!canEdit}
                     title={t('ribbonShrinkFont')}
                     onClick={() => stepFontSize(-1)}
                   >
@@ -1838,7 +2048,7 @@ export function Ribbon({
                   <div className="rb-split-wrap">
                     <button
                       className="rb-icon"
-                      disabled={!hasDoc}
+                      disabled={!canEdit}
                       title={t('ribbonChangeCase')}
                       onClick={() => setDropdown((v) => (v === 'case' ? null : 'case'))}
                     >
@@ -1860,7 +2070,7 @@ export function Ribbon({
                   </div>
                   <button
                     className="rb-icon"
-                    disabled={!hasDoc}
+                    disabled={!canEdit}
                     title={t('ribbonClearFormatting')}
                     onClick={() => chain().unsetAllMarks().run()}
                   >
@@ -1868,21 +2078,21 @@ export function Ribbon({
                   </button>
                 </div>
                 <div className="rb-row">
-                  {markBtn('bold', t('ribbonBoldTip'), <b>B</b>)}
-                  {markBtn('italic', t('ribbonItalicTip'), <i>I</i>)}
-                  {markBtn('underline', t('ribbonUnderlineTip'), <u>U</u>)}
-                  {markBtn('strike', t('ribbonStrikethrough'), <s>ab</s>)}
+                  {markBtn('bold', fs.bold, t('ribbonBoldTip'), <b>B</b>)}
+                  {markBtn('italic', fs.italic, t('ribbonItalicTip'), <i>I</i>)}
+                  {markBtn('underline', fs.underline, t('ribbonUnderlineTip'), <u>U</u>)}
+                  {markBtn('strike', fs.strike, t('ribbonStrikethrough'), <s>ab</s>)}
                   <button
-                    className={`rb-icon rb-script ${textAttrs.vertAlign === 'subscript' ? 'active' : ''}`}
-                    disabled={!hasDoc}
+                    className={`rb-icon rb-script ${fs.vertAlign === 'subscript' ? 'active' : ''}`}
+                    disabled={!canEdit}
                     title={t('ribbonSubscript')}
                     onClick={() => toggleVertAlign('subscript')}
                   >
                     x<sub>2</sub>
                   </button>
                   <button
-                    className={`rb-icon rb-script ${textAttrs.vertAlign === 'superscript' ? 'active' : ''}`}
-                    disabled={!hasDoc}
+                    className={`rb-icon rb-script ${fs.vertAlign === 'superscript' ? 'active' : ''}`}
+                    disabled={!canEdit}
                     title={t('ribbonSuperscript')}
                     onClick={() => toggleVertAlign('superscript')}
                   >
@@ -1892,12 +2102,12 @@ export function Ribbon({
                   {/* highlight: main button applies pen color, caret opens palette */}
                   <div className="rb-split-wrap">
                     <button
-                      className={`rb-icon rb-color-btn ${textAttrs.highlight ? 'active' : ''}`}
-                      disabled={!hasDoc}
+                      className={`rb-icon rb-color-btn ${fs.highlight ? 'active' : ''}`}
+                      disabled={!canEdit}
                       title={t('ribbonTextHighlightColor')}
                       onClick={() =>
                         setTextStyle({
-                          highlight: textAttrs.highlight === penHighlight ? null : penHighlight,
+                          highlight: fs.highlight === penHighlight ? null : penHighlight,
                         })
                       }
                     >
@@ -1909,7 +2119,7 @@ export function Ribbon({
                     </button>
                     <button
                       className="rb-caret rb-color-caret"
-                      disabled={!hasDoc}
+                      disabled={!canEdit}
                       onClick={() => setDropdown((v) => (v === 'highlight' ? null : 'highlight'))}
                     >
                       <IconCaret />
@@ -1923,7 +2133,7 @@ export function Ribbon({
                           {HIGHLIGHTS.map((h) => (
                             <button
                               key={h}
-                              className={`color-swatch color-highlight-swatch ${textAttrs.highlight === h ? 'selected' : ''}`}
+                              className={`color-swatch color-highlight-swatch ${fs.highlight === h ? 'selected' : ''}`}
                               title={h}
                               style={{ background: HIGHLIGHT_CSS[h] }}
                               onClick={() => {
@@ -1934,7 +2144,7 @@ export function Ribbon({
                           ))}
                         </div>
                         <button
-                          className={`color-none color-highlight-none ${!textAttrs.highlight ? 'selected' : ''}`}
+                          className={`color-none color-highlight-none ${!fs.highlight ? 'selected' : ''}`}
                           onClick={() => setTextStyle({ highlight: null })}
                         >
                           {t('ribbonNoColor')}
@@ -1946,7 +2156,7 @@ export function Ribbon({
                   <div className="rb-split-wrap">
                     <button
                       className="rb-icon rb-color-btn"
-                      disabled={!hasDoc}
+                      disabled={!canEdit}
                       title={t('ribbonFontColor')}
                       onClick={() =>
                         setTextStyle({ color: penColor === '000000' ? null : penColor })
@@ -1957,7 +2167,7 @@ export function Ribbon({
                     </button>
                     <button
                       className="rb-caret rb-color-caret"
-                      disabled={!hasDoc}
+                      disabled={!canEdit}
                       onClick={() => setDropdown((v) => (v === 'color' ? null : 'color'))}
                     >
                       <IconCaret />
@@ -1965,7 +2175,7 @@ export function Ribbon({
                     {dropdown === 'color' && (
                       <div className="color-palette color-palette-word">
                         <button
-                          className={`color-automatic ${!textAttrs.color ? 'selected' : ''}`}
+                          className={`color-automatic ${!fs.textColor ? 'selected' : ''}`}
                           onClick={() => {
                             setPenColor('000000')
                             setTextStyle({ color: null })
@@ -1978,7 +2188,7 @@ export function Ribbon({
                           {THEME_COLORS.map((c) => (
                             <button
                               key={c.hex}
-                              className={`color-swatch color-swatch-large ${textAttrs.color === c.hex ? 'selected' : ''}`}
+                              className={`color-swatch color-swatch-large ${fs.textColor === c.hex ? 'selected' : ''}`}
                               title={t(c.nameKey)}
                               style={{ background: `#${c.hex}` }}
                               onClick={() => {
@@ -1993,7 +2203,7 @@ export function Ribbon({
                             row.map((hex, columnIndex) => (
                               <button
                                 key={`${rowIndex}-${columnIndex}-${hex}`}
-                                className={`color-swatch color-swatch-large ${textAttrs.color === hex ? 'selected' : ''}`}
+                                className={`color-swatch color-swatch-large ${fs.textColor === hex ? 'selected' : ''}`}
                                 title={t('ribbonThemeColorShadeTip', {
                                   r: rowIndex + 1,
                                   c: columnIndex + 1,
@@ -2014,7 +2224,7 @@ export function Ribbon({
                           {COLORS.map((c) => (
                             <button
                               key={c.hex}
-                              className={`color-swatch color-swatch-large ${textAttrs.color === c.hex ? 'selected' : ''}`}
+                              className={`color-swatch color-swatch-large ${fs.textColor === c.hex ? 'selected' : ''}`}
                               title={t(c.nameKey)}
                               style={{ background: `#${c.hex}` }}
                               onClick={() => {
@@ -2055,8 +2265,8 @@ export function Ribbon({
                 <div className="rb-row">
                   <div className="rb-split-wrap">
                     <button
-                      className={`rb-icon ${editor.isActive('docListItem', { kind: 'bullet' }) ? 'active' : ''}`}
-                      disabled={!hasDoc || !!sub}
+                      className={`rb-icon ${fs.listBullet ? 'active' : ''}`}
+                      disabled={!canEdit || !!sub}
                       title={t('ribbonBullets')}
                       onClick={() => toggleList('bullet')}
                     >
@@ -2064,7 +2274,7 @@ export function Ribbon({
                     </button>
                     <button
                       className="rb-caret"
-                      disabled={!hasDoc || !!sub}
+                      disabled={!canEdit || !!sub}
                       title={t('ribbonBullets')}
                       onClick={() => setDropdown((v) => (v === 'bulletLib' ? null : 'bulletLib'))}
                     >
@@ -2089,8 +2299,8 @@ export function Ribbon({
                   </div>
                   <div className="rb-split-wrap">
                     <button
-                      className={`rb-icon ${editor.isActive('docListItem', { kind: 'ordered' }) ? 'active' : ''}`}
-                      disabled={!hasDoc || !!sub}
+                      className={`rb-icon ${fs.listOrdered ? 'active' : ''}`}
+                      disabled={!canEdit || !!sub}
                       title={t('ribbonNumbering')}
                       onClick={() => toggleList('ordered')}
                     >
@@ -2098,7 +2308,7 @@ export function Ribbon({
                     </button>
                     <button
                       className="rb-caret"
-                      disabled={!hasDoc || !!sub}
+                      disabled={!canEdit || !!sub}
                       title={t('ribbonNumbering')}
                       onClick={() => setDropdown((v) => (v === 'numberLib' ? null : 'numberLib'))}
                     >
@@ -2129,7 +2339,7 @@ export function Ribbon({
                   <div className="rb-split-wrap">
                     <button
                       className="rb-icon"
-                      disabled={!hasDoc || !!sub}
+                      disabled={!canEdit || !!sub}
                       title={t('ribbonMultilevelTip')}
                       onClick={() => setDropdown((v) => (v === 'multiLib' ? null : 'multiLib'))}
                     >
@@ -2168,7 +2378,7 @@ export function Ribbon({
                   <span className="rb-mini-sep" />
                   <button
                     className="rb-icon"
-                    disabled={!hasDoc || !!sub}
+                    disabled={!canEdit || !!sub}
                     title={t('ribbonDecreaseIndent')}
                     onClick={() => changeIndent(-1)}
                   >
@@ -2176,7 +2386,7 @@ export function Ribbon({
                   </button>
                   <button
                     className="rb-icon"
-                    disabled={!hasDoc || !!sub}
+                    disabled={!canEdit || !!sub}
                     title={t('ribbonIncreaseIndent')}
                     onClick={() => changeIndent(1)}
                   >
@@ -2202,41 +2412,58 @@ export function Ribbon({
                 <div className="rb-row">
                   <button
                     className={`rb-icon ${activeAlign === 'left' ? 'active' : ''}`}
-                    disabled={!hasDoc}
+                    disabled={!canEdit}
                     title={t('ribbonAlignLeftTip')}
-                    onClick={() => setParaAttr({ align: null })}
+                    onClick={() => setSelectionAlign(ed, 'left')}
                   >
                     <IconAlignLeft />
                   </button>
                   <button
                     className={`rb-icon ${activeAlign === 'center' ? 'active' : ''}`}
-                    disabled={!hasDoc}
+                    disabled={!canEdit}
                     title={t('ribbonAlignCenterTip')}
-                    onClick={() => setParaAttr({ align: 'center' })}
+                    onClick={() => setSelectionAlign(ed, 'center')}
                   >
                     <IconAlignCenter />
                   </button>
                   <button
                     className={`rb-icon ${activeAlign === 'right' ? 'active' : ''}`}
-                    disabled={!hasDoc}
+                    disabled={!canEdit}
                     title={t('ribbonAlignRightTip')}
-                    onClick={() => setParaAttr({ align: 'right' })}
+                    onClick={() => setSelectionAlign(ed, 'right')}
                   >
                     <IconAlignRight />
                   </button>
                   <button
                     className={`rb-icon ${activeAlign === 'justify' ? 'active' : ''}`}
-                    disabled={!hasDoc}
+                    disabled={!canEdit}
                     title={t('ribbonJustifyTip')}
-                    onClick={() => setParaAttr({ align: 'justify' })}
+                    onClick={() => setSelectionAlign(ed, 'justify')}
                   >
                     <IconAlignJustify />
+                  </button>
+                  <span className="rb-mini-sep" />
+                  <button
+                    className={`rb-icon ${!fs.bidi ? 'active' : ''}`}
+                    disabled={!canEdit || !!sub}
+                    title={t('ribbonDirLtrTip')}
+                    onClick={() => setParagraphDirection(editor, 'ltr')}
+                  >
+                    <IconDirLtr />
+                  </button>
+                  <button
+                    className={`rb-icon ${fs.bidi ? 'active' : ''}`}
+                    disabled={!canEdit || !!sub}
+                    title={t('ribbonDirRtlTip')}
+                    onClick={() => setParagraphDirection(editor, 'rtl')}
+                  >
+                    <IconDirRtl />
                   </button>
                   <span className="rb-mini-sep" />
                   <div className="rb-split-wrap">
                     <button
                       className={`rb-icon ${activeSpacing ? 'active' : ''}`}
-                      disabled={!hasDoc}
+                      disabled={!canEdit}
                       title={t('ribbonLineSpacing')}
                       onClick={() => setDropdown((v) => (v === 'spacing' ? null : 'spacing'))}
                     >
@@ -2281,8 +2508,8 @@ export function Ribbon({
                   </div>
                   <div className="rb-split-wrap">
                     <button
-                      className={`rb-icon ${paraAttrs.shadingFill ? 'active' : ''}`}
-                      disabled={!hasDoc}
+                      className={`rb-icon ${fs.shadingFill ? 'active' : ''}`}
+                      disabled={!canEdit}
                       title={t('ribbonParagraphShading')}
                       onClick={() => setDropdown((v) => (v === 'shading' ? null : 'shading'))}
                     >
@@ -2313,8 +2540,8 @@ export function Ribbon({
                   </div>
                   <div className="rb-split-wrap">
                     <button
-                      className={`rb-icon ${paraAttrs.borders ? 'active' : ''}`}
-                      disabled={!hasDoc}
+                      className={`rb-icon ${fs.paraBorders ? 'active' : ''}`}
+                      disabled={!canEdit}
                       title={t('ribbonParagraphBorders')}
                       onClick={() => setDropdown((v) => (v === 'borders' ? null : 'borders'))}
                     >
@@ -2354,60 +2581,28 @@ export function Ribbon({
             <div className="ribbon-sep" />
 
             {/* ---- Styles ---- */}
-            <div className="ribbon-group">
-              <div className="ribbon-group-items style-gallery">
-                {STYLE_GALLERY.map((s) => (
+            <div className="ribbon-group ribbon-group-styles">
+              <div className="ribbon-group-items rb-split-wrap style-gallery-wrap">
+                <div className="style-gallery" ref={styleGalleryRef}>
+                  {renderStyleCards(false)}
+                </div>
+                {/* clipped cards stay reachable through the expander grid */}
+                {styleGalleryOverflow && (
                   <button
-                    key={s.key}
-                    className={`style-card ${activeStyleKey === s.key ? 'active' : ''}`}
-                    disabled={!hasDoc || !!sub}
-                    onClick={() => applyStyle(s.key)}
+                    className="style-gallery-more"
+                    title={t('ribbonMoreStyles')}
+                    aria-label={t('ribbonMoreStyles')}
+                    aria-expanded={dropdown === 'styleGallery'}
+                    onClick={() =>
+                      setDropdown((v) => (v === 'styleGallery' ? null : 'styleGallery'))
+                    }
                   >
-                    <span className={`style-card-preview ${s.className}`}>
-                      {t('ribbonStylePreview')}
-                    </span>
-                    <span className="style-card-label">{t(s.labelKey)}</span>
+                    <IconCaret />
                   </button>
-                ))}
-                {charStyleItems.slice(0, MAX_INLINE_CHAR_STYLES).map((s) => (
-                  <button
-                    key={s.key}
-                    className={`style-card style-card-char ${activeStyleKey === s.key ? 'active' : ''}`}
-                    disabled={!hasDoc}
-                    title={s.label}
-                    onClick={() => applyStyle(s.key)}
-                  >
-                    <span className="style-card-preview" style={s.previewStyle}>
-                      Aa
-                    </span>
-                    <span className="style-card-label">{s.label}</span>
-                  </button>
-                ))}
-                <button
-                  className="style-gallery-more"
-                  disabled={!hasDoc}
-                  title={t('ribbonStylePaneTip')}
-                  onClick={() => onStylesPanel?.()}
-                >
-                  {/* "More styles" icon: horizontal lines + down arrow */}
-                  <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
-                    <path
-                      d="M1.5 2h8"
-                      stroke="currentColor"
-                      strokeWidth="1.3"
-                      strokeLinecap="round"
-                      fill="none"
-                    />
-                    <path
-                      d="M2 5.5 5.5 9 9 5.5"
-                      stroke="currentColor"
-                      strokeWidth="1.3"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      fill="none"
-                    />
-                  </svg>
-                </button>
+                )}
+                {dropdown === 'styleGallery' && (
+                  <div className="style-gallery-menu">{renderStyleCards(true)}</div>
+                )}
               </div>
               <div className="ribbon-group-label">{t('ribbonGroupStyles')}</div>
             </div>
@@ -2427,7 +2622,7 @@ export function Ribbon({
         ) : tab === 'insert' ? (
           <InsertTab
             editor={editor}
-            hasDoc={hasDoc}
+            hasDoc={canEdit}
             dropdown={dropdown}
             setDropdown={setDropdown}
             header={header}
@@ -2446,7 +2641,7 @@ export function Ribbon({
         ) : tab === 'design' ? (
           <DesignTab
             editor={editor}
-            hasDoc={hasDoc}
+            hasDoc={canEdit}
             dropdown={dropdown}
             setDropdown={setDropdown}
             pageColor={pageColor}
@@ -2462,7 +2657,7 @@ export function Ribbon({
         ) : tab === 'layout' ? (
           <LayoutTab
             editor={editor}
-            hasDoc={hasDoc}
+            hasDoc={canEdit}
             dropdown={dropdown}
             setDropdown={setDropdown}
             section={section}
@@ -2473,7 +2668,7 @@ export function Ribbon({
         ) : tab === 'references' ? (
           <ReferencesTab
             editor={editor}
-            hasDoc={hasDoc}
+            hasDoc={canEdit}
             blocks={blocks}
             dropdown={dropdown}
             setDropdown={setDropdown}
@@ -2565,6 +2760,10 @@ export function Ribbon({
     </div>
   )
 }
+
+// memo + shallow-stable formatState/callback props: caret moves that change no
+// displayed format skip re-rendering the whole ribbon
+export const Ribbon = memo(RibbonInner)
 
 // ---- Define New Multilevel List dialog ----
 

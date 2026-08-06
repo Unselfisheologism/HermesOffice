@@ -8,7 +8,7 @@ repository.
 
 `main` is the trunk: every change ships as a reviewed, **squash-merged** pull
 request (the merge commit carries the full PR description). Maintainers sync
-with the [upstream GenOffice](https://github.com/genspark-ai/genoffice) tree
+with the [upstream HermesOffice](https://github.com/genspark-ai/hermesoffice) tree
 periodically — engines and app shells follow upstream, so please focus
 contributions on the fork's own layer (Hermes integration, agent features,
 collaboration, product polish) and on bug fixes to engines.

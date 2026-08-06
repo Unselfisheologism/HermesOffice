@@ -1,35 +1,32 @@
 /**
- * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
- * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
- * atribuição original preservada em NOTICE.
- */
-/**
  * AI IPC for the slides main process, extracted from slides-main.ts:
  * settings persistence, the streaming proxy (main process does the networking
  * to avoid renderer CORS), search tools, and the slides-only ai:* channels
  * (image generation, media analysis, style templates).
  */
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, shell } from 'electron'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  AiCreditsError,
+  AiTimeoutError,
   defaultAiSettings,
   resolveAiSettings,
   streamForProvider,
   type AiSettings,
   type AiStreamChunk,
   type AiStreamRequest,
-  type GatewayAccountStatus,
+  type GenSparkAccountStatus,
   type LegacyAiSettings,
 } from '@hermesoffice/ai-provider'
-import { fetchWithSsrfGuard } from '@hermesoffice/electron-utils'
+import { fetchRemoteImage } from '@hermesoffice/electron-utils'
 import {
   webSearch,
   imageSearch,
+  ensureGenofficeLogin,
   gskApiKey,
   gskGenerateImage,
   gskAnalyzeMedia,
-  gskLogin,
   gskLoginInfo,
   hasGskAuth,
 } from '@hermesoffice/ai-search'
@@ -62,15 +59,15 @@ export function registerAiIpc(): void {
   ipcMain.handle('ai:get-settings', (): AiSettings => {
     const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(AI_SETTINGS_PATH(), {})
     const settings = resolveAiSettings(stored, defaultAiSettings())
-    // AI features all go through Hermes (gsk login); stored settings that chose another provider are normalized back
+    // AI features all go through Genspark (gsk login); stored settings that chose another provider are normalized back
     settings.provider = 'hermes'
     return settings
   })
 
-  // Hermes account (gsk login state): the auth source for AI features; when logged out the frontend uses this to guide login
+  // Genspark account (gsk login state): the auth source for AI features; when logged out the frontend uses this to guide login
   ipcMain.handle(
     'ai:gsk-status',
-    async (_event, withEmail?: boolean): Promise<GatewayAccountStatus> => {
+    async (_event, withEmail?: boolean): Promise<GenSparkAccountStatus> => {
       if (!hasGskAuth()) return { loggedIn: false }
       if (!withEmail) return { loggedIn: true }
       const info = await gskLoginInfo()
@@ -79,7 +76,7 @@ export function registerAiIpc(): void {
   )
 
   ipcMain.handle('ai:gsk-login', () => {
-    gskLogin()
+    ensureGenofficeLogin((url) => void shell.openExternal(url))
   })
 
   ipcMain.handle('ai:set-settings', (_event, settings: AiSettings) => {
@@ -92,7 +89,7 @@ export function registerAiIpc(): void {
     const maxTokens = request.maxTokens ?? 8192
     const provider = settings.provider
     let config = settings.providers?.[provider]
-    // The upstream key never enters the settings file; it is fetched from the gsk login state per request
+    // The genspark key never enters the settings file; it is fetched from the gsk login state per request
     if (provider === 'genspark' && config && !config.apiKey) {
       config = { ...config, apiKey: gskApiKey() }
     }
@@ -113,12 +110,21 @@ export function registerAiIpc(): void {
     }
     const controller = new AbortController()
     activeAiStreams.set(requestId, controller)
+    // wire-activity keepalive: lets the renderer's silence watchdog tell a slow turn from a dead one
+    let lastPing = 0
+    const ping = () => {
+      const now = Date.now()
+      if (now - lastPing < 5_000) return
+      lastPing = now
+      send({ requestId, type: 'ping' })
+    }
     try {
       await streamForProvider(provider, config, system, messages, tools, maxTokens, {
         signal: controller.signal,
         onDelta: (text) => send({ requestId, type: 'delta', text }),
         onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
-      }, request.sessionId)
+        onActivity: ping,
+      })
       send({ requestId, type: 'done' })
     } catch (err) {
       if (controller.signal.aborted) {
@@ -126,7 +132,16 @@ export function registerAiIpc(): void {
       } else {
         const msg = err instanceof Error ? err.message : String(err)
         console.error(`[ai-stream] ${requestId} (${provider}/${config.model}) failed:`, msg)
-        send({ requestId, type: 'error', error: msg })
+        send({
+          requestId,
+          type: 'error',
+          error: msg,
+          ...(err instanceof AiTimeoutError
+            ? { errorCode: 'timeout' as const }
+            : err instanceof AiCreditsError
+              ? { errorCode: 'credits' as const }
+              : {}),
+        })
       }
     } finally {
       activeAiStreams.delete(requestId)
@@ -161,7 +176,7 @@ export function registerAiIpc(): void {
 // never called; docs does not have these channels, so putting them in the wrong place raises
 // "No handler registered".
 export function registerSlidesOnlyAiIpc(): void {
-  // gsk (Hermes CLI) capabilities: AI image generation / media analysis. Returns an error prompt when not logged in.
+  // gsk (Genspark CLI) capabilities: AI image generation / media analysis. Returns an error prompt when not logged in.
   ipcMain.handle(
     'ai:generate-image',
     async (
@@ -230,10 +245,9 @@ export function registerSlidesOnlyAiIpc(): void {
       try {
         // the URL originates from AI tool calls (prompt-injectable via image
         // search results), so refuse non-http schemes and private/link-local
-        // targets; redirects are followed manually so every hop is validated
-        const resp = await fetchWithSsrfGuard(String(op.url), {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-        })
+        // targets; redirects are followed manually so every hop is validated.
+        // fetchRemoteImage adds CDN-friendly headers and transient-error retries.
+        const resp = await fetchRemoteImage(String(op.url))
         if (!resp || !resp.ok) return null
         const buf = Buffer.from(await resp.arrayBuffer())
         const ct = resp.headers.get('content-type') ?? ''

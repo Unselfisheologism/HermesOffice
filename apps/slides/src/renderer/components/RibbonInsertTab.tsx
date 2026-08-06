@@ -1,13 +1,14 @@
 /** Insert tab of the slides ribbon. Extracted from Ribbon.tsx. */
 import type { InsertKind } from '../../shared/ipc'
+import { WORDART_PRESETS, wordArtStrokePx } from '@hermesoffice/ui'
 import {
   CHART_GALLERY,
   ICON_COLORS,
   ICON_GALLERY,
   SHAPE_GALLERY,
   SMARTART_GALLERY,
-  WORDART_PRESETS,
 } from '../insert-presets'
+import type { StringKey } from '../i18n/locale'
 import { ChartKindThumb } from './ChartTypeDialog'
 import { ShapePreview, SmartArtPreview } from './gallery-previews'
 import {
@@ -33,10 +34,11 @@ import {
   IconZoomJump,
 } from './icons'
 import { saveEditSelection } from '../TextEditOverlay'
-import { BIG, Group, RbCaret, type RibbonTabCtx } from './ribbon-shared'
+import { BIG, Group, RbCaret, closeSiblingPanels, type RibbonTabCtx } from './ribbon-shared'
 
 export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
   const {
+    closePanels,
     currentSlide,
     editing,
     hasDoc,
@@ -45,6 +47,7 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
     onAddSlide,
     onAddSlideWithLayout,
     onInsert,
+    onPickShape,
     onInsertChart,
     onInsertField,
     onInsertIcon,
@@ -91,7 +94,10 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
               <span
                 className={`rb-caret-hit${layoutOpen ? ' active' : ''}`}
                 title={t('ribbonChooseLayout')}
-                onMouseDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => {
+                  e.stopPropagation()
+                  closeSiblingPanels(e, closePanels, 'layout')
+                }}
                 onClick={(e) => {
                   e.stopPropagation()
                   if (hasDoc) setLayoutOpen((v) => !v)
@@ -161,7 +167,10 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
             className={`rb-big ${tableOpen ? 'active' : ''}`}
             disabled={!hasDoc}
             title={t('ribbonInsertTableTip')}
-            onMouseDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              closeSiblingPanels(e, closePanels, 'table')
+            }}
             onClick={() => setTableOpen((v) => !v)}
           >
             <span className="rb-big-icon">
@@ -319,7 +328,7 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
                       title={s.label}
                       onClick={() => {
                         setInsertDrop(null)
-                        onInsert(s.prst as InsertKind)
+                        onPickShape(s.prst as InsertKind)
                       }}
                     >
                       <ShapePreview prst={s.prst} size={18} />
@@ -455,10 +464,12 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
               <button
                 key={p.id}
                 className="rb-wordart-cell"
-                title={t('ribbonWordArtCellTip')}
+                title={t(p.nameKey as StringKey)}
                 style={{
                   color: p.fill,
-                  WebkitTextStroke: p.outline ? `1px ${p.outline.color}` : undefined,
+                  WebkitTextStroke: p.outline
+                    ? `${wordArtStrokePx(p.outline.widthEmu)}px ${p.outline.color}`
+                    : undefined,
                   fontWeight: p.bold ? 800 : 400,
                   fontStyle: p.italic ? 'italic' : undefined,
                 }}
@@ -467,7 +478,7 @@ export function RibbonInsertTab({ rb }: { rb: RibbonTabCtx }) {
                   onInsertWordArt(p)
                 }}
               >
-                A
+                {t('ribbonWordArtPreviewChar')}
               </button>
             ))}
           </div>,

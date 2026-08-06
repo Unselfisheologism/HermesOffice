@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { SHAPE_GALLERY_GROUPS, ShapePreview } from '@hermesoffice/ui'
 
 import {
   CaretIcon,
-  HermesMark,
+  GensparkMark,
   RIBBON_GLYPH_ICONS,
   RedoIcon,
   SaveIcon,
@@ -179,6 +180,9 @@ interface ExcelShellProps {
   readonly onRefreshPivot: () => string | null
   readonly onIsSelectionInPivot: () => boolean
   readonly onGetActiveCell: () => string
+  /// Value of the selection's top-left cell, read when Format Cells opens
+  /// (number-format preview).
+  readonly onGetAnchorValue: () => number | string | null
   /// A1 label of the active cell, echoed live by the Name Box.
   readonly activeCellA1: string
   /// Name Box / Go To jump; returns an error message, or null on success.
@@ -238,6 +242,7 @@ export function ExcelShell({
   onRefreshPivot,
   onIsSelectionInPivot,
   onGetActiveCell,
+  onGetAnchorValue,
   activeCellA1,
   onGoToReference,
   onListDefinedNames,
@@ -451,35 +456,36 @@ export function ExcelShell({
           <section className="workbook-area">
             <div id="univer-container" className="spreadsheet" />
           </section>
+
+          {/* Status bar spans the sheet column only — the AI dock keeps the full window height (unified with docs/slides). */}
+          <footer className="status-bar">
+            <div className="status-left">
+              <span className="status-msg">{statusMessage}</span>
+            </div>
+            <div className="status-right">
+              <button className="zoom-btn" onClick={() => onCommand('zoom-out')}>
+                −
+              </button>
+              <input
+                className="zoom-slider"
+                type="range"
+                min={50}
+                max={400}
+                value={Math.min(400, Math.max(50, zoomPercent))}
+                onChange={(event) => onCommand(`zoom:${event.target.value}`)}
+              />
+              <button className="zoom-btn" onClick={() => onCommand('zoom-in')}>
+                +
+              </button>
+              <span className="zoom-value">{zoomPercent}%</span>
+            </div>
+          </footer>
         </div>
       </div>
-
-      {/* Full-width status bar, unified with docs/slides (Univer's own zoom slider is disabled). */}
-      <footer className="status-bar">
-        <div className="status-left">
-          <span className="status-msg">{statusMessage}</span>
-        </div>
-        <div className="status-right">
-          <button className="zoom-btn" onClick={() => onCommand('zoom-out')}>
-            −
-          </button>
-          <input
-            className="zoom-slider"
-            type="range"
-            min={50}
-            max={400}
-            value={Math.min(400, Math.max(50, zoomPercent))}
-            onChange={(event) => onCommand(`zoom:${event.target.value}`)}
-          />
-          <button className="zoom-btn" onClick={() => onCommand('zoom-in')}>
-            +
-          </button>
-          <span className="zoom-value">{zoomPercent}%</span>
-        </div>
-      </footer>
       {showFormatCells && (
         <FormatCellsDialog
           selectionFormat={selectionFormat}
+          anchorValue={onGetAnchorValue()}
           onCommand={onCommand}
           onClose={() => setShowFormatCells(false)}
         />
@@ -1260,27 +1266,15 @@ function Ribbon({
               <ToolSymbol symbol="◇" />
               {t('appShapes')}
               <CaretIcon />
-              <MenuSelect
-                cover
+              <ShapeGallerySelect
                 label="Shapes"
-                options={[
-                  { value: 'rect', label: t('appShapeRect') },
-                  { value: 'roundRect', label: t('appShapeRoundRect') },
-                  { value: 'ellipse', label: t('appShapeEllipse') },
-                  { value: 'triangle', label: t('appShapeTriangle') },
-                  { value: 'diamond', label: t('appShapeDiamond') },
-                  { value: 'rightArrow', label: t('appShapeRightArrow') },
-                  { value: 'leftArrow', label: t('appShapeLeftArrow') },
-                  { value: 'pentagon', label: t('appShapePentagon') },
-                  { value: 'hexagon', label: t('appShapeHexagon') },
-                ]}
-                onPick={(value) => onCommand(`insert-shape:${value}`)}
+                onPick={(prst) => onCommand(`insert-shape:${prst}`)}
               />
             </span>
-            <span className="styles-row reserved" title={t('appNotAvailableYet')}>
+            <button className="styles-row as-button" onClick={() => onCommand('insert-icons')}>
               <ToolSymbol symbol="✧" />
               {t('appIcons')}
-            </span>
+            </button>
             <span className="styles-row reserved" title={t('appNotAvailableYet')}>
               <ToolSymbol symbol="⬡" />
               {t('app3dModels')}
@@ -1292,18 +1286,23 @@ function Ribbon({
               <ToolSymbol symbol="▤" />
               SmartArt
             </span>
-            <span className="styles-row reserved" title={t('appNotAvailableYet')}>
+            <button className="styles-row as-button" onClick={() => onCommand('insert-screenshot')}>
               <ToolSymbol symbol="⧉" />
               {t('appScreenshot')}
-              <CaretIcon />
-            </span>
+            </button>
           </div>
         </RibbonGroup>
         <RibbonGroup label={t('appGroupCheckbox')}>
           <RibbonReserved large label={t('appGroupCheckbox')} symbol="☑" />
         </RibbonGroup>
         <RibbonGroup label={t('appGroupCharts')}>
-          <RibbonReserved large label={t('appRecommendedCharts')} symbol="📊" />
+          <RibbonButton
+            large
+            label={t('appRecommendedCharts')}
+            detail={t('appFromSelection')}
+            symbol="📊"
+            onClick={() => onCommand('recommended-charts-open')}
+          />
           <div className="chart-grid">
             <button
               title={t('appChartGridTitle', { type: t('appChartColumn') })}
@@ -2054,10 +2053,10 @@ function Ribbon({
           onClick={onAiToggle}
         >
           <span className="tool-icon-row">
-            <HermesMark size={26} />
+            <GensparkMark size={26} />
           </span>
           <span>
-            <strong>Hermes AI</strong>
+            <strong>Genspark AI</strong>
           </span>
         </button>
         <button
@@ -2076,9 +2075,12 @@ function Ribbon({
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <circle cx="10.5" cy="10.5" r="6.2" />
-                <path d="m15.3 15.3 5.2 5.2" strokeLinecap="round" />
-                <path d="m7.9 10.7 1.9 1.9 3.3-3.3" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M11 3.25C15.2802 3.25 18.75 6.71979 18.75 11C18.75 15.2802 15.2802 18.75 11 18.75C6.71979 18.75 3.25 15.2802 3.25 11C3.25 6.71979 6.71979 3.25 11 3.25Z" />
+                <path
+                  d="M7.5 10.8235L9.64097 12.9645C9.93755 13.2611 10.4177 13.2634 10.7171 12.9697L14.7647 9"
+                  strokeLinecap="round"
+                />
+                <path d="M20 20.5L16.5 17" strokeLinecap="round" />
               </svg>
             </span>
           </span>
@@ -2102,8 +2104,11 @@ function Ribbon({
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <path d="M4.5 4.5v15h15" strokeLinecap="round" />
-                <path d="M9 15.5v-4M13 15.5V7.5M17 15.5v-6" strokeLinecap="round" />
+                <path d="M3.88589 14.2073H8.48682" strokeLinecap="round" />
+                <path d="M3.88589 19.0112H8.48682" strokeLinecap="round" />
+                <path d="M3.88589 9.40369H11.692" strokeLinecap="round" />
+                <path d="M3.88589 4.59998H19.1645" strokeLinecap="round" />
+                <path d="M15.1995 10.5445C15.3784 10.0908 16.0206 10.0908 16.1996 10.5445L16.706 11.8286C17.0338 12.6598 17.6918 13.3178 18.523 13.6456L19.8071 14.1521C20.2608 14.331 20.2608 14.9732 19.8071 15.1522L18.523 15.6586C17.6918 15.9864 17.0338 16.6444 16.706 17.4756L16.1996 18.7597C16.0206 19.2134 15.3784 19.2134 15.1995 18.7597L14.693 17.4756C14.3652 16.6444 13.7072 15.9864 12.876 15.6586L11.592 15.1522C11.1382 14.9732 11.1382 14.331 11.592 14.1521L12.876 13.6456C13.7072 13.3178 14.3652 12.6598 14.693 11.8286L15.1995 10.5445Z" />
               </svg>
             </span>
           </span>
@@ -2515,15 +2520,6 @@ function Ribbon({
           </div>
         </div>
       </RibbonGroup>
-      <div className="ribbon-hermes-sep" aria-hidden />
-      <button
-        className="ribbon-hermes-btn"
-        title={t('aiOpenAssistant')}
-        onClick={() => onCommand('ai-toggle-panel')}
-      >
-        <HermesMark size={28} />
-        <span>Hermes</span>
-      </button>
     </div>
   )
 }
@@ -2606,6 +2602,78 @@ function MenuSelect({
             >
               {option.label}
             </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/// Cross-app shared shape gallery (slides parity), minus Lines — the grid
+/// renderer draws shapes as filled paths and cannot show stroke-only connectors.
+const SHEET_SHAPE_GROUPS = SHAPE_GALLERY_GROUPS.filter(
+  (g) => g.groupKey !== 'ribbonShapeGroupLines',
+)
+
+/// Shapes dropdown: grouped outline-icon grid (same look/content as docs and
+/// slides); the trigger is an invisible cover like MenuSelect's `cover` mode.
+function ShapeGallerySelect({
+  label,
+  onPick,
+}: {
+  readonly label: string
+  readonly onPick: (prst: string) => void
+}): React.JSX.Element {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (event: MouseEvent): void => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <div ref={wrapRef} className="menu-select menu-select-cover">
+      <button
+        type="button"
+        className="cover-select"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      />
+      {open && (
+        <div className="menu-select-drop rb-shape-gallery" role="listbox" aria-label={label}>
+          {SHEET_SHAPE_GROUPS.map((group) => (
+            <div key={group.groupKey}>
+              <div className="rb-drop-title">{t(group.groupKey as StringKey)}</div>
+              <div className="rb-shape-grid">
+                {group.shapes.map((s) => (
+                  <button
+                    type="button"
+                    key={s.prst}
+                    className="rb-shape-cell"
+                    title={t(s.labelKey as StringKey)}
+                    onClick={() => {
+                      setOpen(false)
+                      onPick(s.prst)
+                    }}
+                  >
+                    <ShapePreview prst={s.prst} size={18} />
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       )}

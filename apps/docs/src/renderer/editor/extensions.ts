@@ -51,6 +51,7 @@ import { constrainTableWidthAtCell } from './table-sizing'
  */
 
 import {
+  CHART_MAX_WIDTH_PX,
   drawChartSvg,
   renderChartSpec,
   renderFieldSpec,
@@ -60,6 +61,7 @@ import {
   textboxBoxStyle,
   wireChartEditing,
 } from './protected-render'
+import { isStraightLineKind } from './shape-svg'
 import {
   BoldMark,
   CommentMark,
@@ -85,6 +87,7 @@ import {
   SearchHighlightExtension,
   TabStopExtension,
 } from './decoration-extensions'
+import { AutoDirectionExtension } from './direction'
 export * from './marks'
 export * from './decoration-extensions'
 
@@ -171,12 +174,15 @@ function blockAttrs(
   // list items already indent via padding; a margin would double-shift them.
   // listGeometry: drive list geometry with w:ind (--li-left text indent, --li-hang the hanging
   // area i.e. the number-marker width); negative text-indent is expressed by the marker box, no longer emitted directly
+  // Logical (inline-start/end) margins: identical to left/right in LTR, and in bidi
+  // paragraphs they mirror, matching Word's quirk that w:ind left/right swap sides.
   if (includeIndent && node.attrs.indentLeft) {
-    styles.push(`margin-left:${Number(node.attrs.indentLeft) / 20}pt`)
+    styles.push(`margin-inline-start:${Number(node.attrs.indentLeft) / 20}pt`)
   } else if (listGeometry && node.attrs.indentLeft) {
     styles.push(`--li-left:${Number(node.attrs.indentLeft) / 20}pt`)
   }
-  if (node.attrs.indentRight) styles.push(`margin-right:${Number(node.attrs.indentRight) / 20}pt`)
+  if (node.attrs.indentRight)
+    styles.push(`margin-inline-end:${Number(node.attrs.indentRight) / 20}pt`)
   if (node.attrs.indentFirstLine) {
     const firstLine = Number(node.attrs.indentFirstLine)
     if (listGeometry && firstLine < 0) styles.push(`--li-hang:${-firstLine / 20}pt`)
@@ -628,51 +634,68 @@ export const ListNumberingExtension = Extension.create<object, ListNumberingStor
   },
   addProseMirrorPlugins() {
     const storage = this.storage
+    const compute = (doc: PmNode): DecorationSet | null => {
+      if (storage.defs.size === 0) return null
+      const refs: ListItemRef[] = []
+      const nodes: Array<{ pos: number; size: number; attrs: Record<string, unknown> }> = []
+      doc.descendants((node, pos) => {
+        if (node.type.name === 'docListItem') {
+          refs.push({
+            numId: (node.attrs.numId as string | null) ?? null,
+            ilvl: Number(node.attrs.ilvl) || 0,
+          })
+          nodes.push({ pos, size: node.nodeSize, attrs: node.attrs })
+          return false
+        }
+        return true
+      })
+      if (refs.length === 0) return null
+      const markers = computeListMarkers(refs, storage.defs)
+      const decos: Decoration[] = []
+      markers.forEach((marker, i) => {
+        if (marker === null) return
+        const attrs: Record<string, string> = { 'data-marker': marker }
+        // geometry fallback: when the paragraph has no w:ind of its own, use the numbering.xml level's indent;
+        // marker font size always comes from the level's rPr (independent of paragraph text size)
+        const def = refs[i].numId !== null ? storage.defs.get(refs[i].numId as string) : undefined
+        const level = def?.levels[Math.max(0, refs[i].ilvl)]
+        if (level) {
+          const styles: string[] = []
+          const nodeAttrs = nodes[i].attrs
+          if (!nodeAttrs.indentLeft && level.indentLeft) {
+            styles.push(`--li-left:${level.indentLeft / 20}pt`)
+          }
+          if (!nodeAttrs.indentFirstLine && level.hanging) {
+            styles.push(`--li-hang:${level.hanging / 20}pt`)
+          }
+          if (level.szHalfPoints) styles.push(`--li-marker-size:${level.szHalfPoints / 2}pt`)
+          if (styles.length > 0) attrs.style = styles.join(';')
+        }
+        decos.push(Decoration.node(nodes[i].pos, nodes[i].pos + nodes[i].size, attrs))
+      })
+      return DecorationSet.create(doc, decos)
+    }
+
+    interface CachedMarkers {
+      defs: Map<string, NumberingDef>
+      decos: DecorationSet | null
+    }
+    const key = new PluginKey<CachedMarkers>('listNumbering')
     return [
-      new Plugin({
-        key: new PluginKey('listNumbering'),
+      new Plugin<CachedMarkers>({
+        key,
+        state: {
+          init: (_config, state) => ({ defs: storage.defs, decos: compute(state.doc) }),
+          apply(tr, old) {
+            // defs is replaced (never mutated) on open/reparse and marker overlay
+            if (tr.docChanged || old.defs !== storage.defs)
+              return { defs: storage.defs, decos: compute(tr.doc) }
+            return old.decos ? { defs: old.defs, decos: old.decos.map(tr.mapping, tr.doc) } : old
+          },
+        },
         props: {
           decorations(state) {
-            if (storage.defs.size === 0) return null
-            const refs: ListItemRef[] = []
-            const nodes: Array<{ pos: number; size: number; attrs: Record<string, unknown> }> = []
-            state.doc.descendants((node, pos) => {
-              if (node.type.name === 'docListItem') {
-                refs.push({
-                  numId: (node.attrs.numId as string | null) ?? null,
-                  ilvl: Number(node.attrs.ilvl) || 0,
-                })
-                nodes.push({ pos, size: node.nodeSize, attrs: node.attrs })
-                return false
-              }
-              return true
-            })
-            if (refs.length === 0) return null
-            const markers = computeListMarkers(refs, storage.defs)
-            const decos: Decoration[] = []
-            markers.forEach((marker, i) => {
-              if (marker === null) return
-              const attrs: Record<string, string> = { 'data-marker': marker }
-              // geometry fallback: when the paragraph has no w:ind of its own, use the numbering.xml level's indent;
-              // marker font size always comes from the level's rPr (independent of paragraph text size)
-              const def =
-                refs[i].numId !== null ? storage.defs.get(refs[i].numId as string) : undefined
-              const level = def?.levels[Math.max(0, refs[i].ilvl)]
-              if (level) {
-                const styles: string[] = []
-                const nodeAttrs = nodes[i].attrs
-                if (!nodeAttrs.indentLeft && level.indentLeft) {
-                  styles.push(`--li-left:${level.indentLeft / 20}pt`)
-                }
-                if (!nodeAttrs.indentFirstLine && level.hanging) {
-                  styles.push(`--li-hang:${level.hanging / 20}pt`)
-                }
-                if (level.szHalfPoints) styles.push(`--li-marker-size:${level.szHalfPoints / 2}pt`)
-                if (styles.length > 0) attrs.style = styles.join(';')
-              }
-              decos.push(Decoration.node(nodes[i].pos, nodes[i].pos + nodes[i].size, attrs))
-            })
-            return DecorationSet.create(state.doc, decos)
+            return key.getState(state)?.decos ?? null
           },
         },
       }),
@@ -1254,6 +1277,17 @@ export const DocProtected = Node.create({
           // Let ProseMirror plugins receive handle presses; floating-object
           // dragging is implemented at the editor-view level.
           if (target?.closest?.('.doc-move-handle')) return false
+          // Shape bodies (prst textboxes) drag-to-move on a plain press (Word
+          // parity); a double-click still reaches the inner editor for the caret
+          if (
+            event.type === 'mousedown' &&
+            (event as MouseEvent).detail < 2 &&
+            target?.closest?.('.doc-textbox') &&
+            !dom.classList.contains('doc-content-editing') &&
+            (currentNode.attrs.textboxes as TextboxDisplay[] | null)?.[0]?.prst
+          ) {
+            return false
+          }
           const contentTarget = target?.closest?.(EDITABLE_PROTECTED_SELECTOR)
           return (
             !!contentTarget &&
@@ -1302,18 +1336,29 @@ function protectedDomSpec(node: PmNode): DomSpec {
         `transform:translate(${Number(offsetX ?? 0) / EMU_PER_PX}px,` +
         `${Number(offsetY ?? 0) / EMU_PER_PX}px)`
     }
-    return [
-      'div',
-      attrs,
-      moveHandleSpec(t('editorMoveTextbox')),
-      ...(textboxes as TextboxDisplay[]).map(renderTextboxSpec),
-    ]
+    const children: DomSpec[] = (textboxes as TextboxDisplay[]).map(renderTextboxSpec)
+    // corner resize handle; multi-box nodes keep per-box autogrow semantics only
+    if ((textboxes as TextboxDisplay[]).length === 1) {
+      children.push(['span', { class: 'box-resize-handle', contenteditable: 'false' }])
+    }
+    return ['div', attrs, moveHandleSpec(t('editorMoveTextbox')), ...children]
   }
   // empty section-break paragraphs (page-per-section converter output): Word
   // shows nothing here, so render a near-invisible strip (hover reveals it)
   if (label === 'Section break paragraph' && !previewText) {
     attrs.class += ' doc-protected-sectbreak'
     return ['div', attrs, ['span', { class: 'doc-sectbreak-label' }, t('editorSectionBreak')]]
+  }
+  // TOC field boundary paragraphs (fldChar begin + instruction / lone fldChar
+  // end) have no visible result; Word shows nothing there either, so they get
+  // the same near-invisible strip (hover/selection reveals the label)
+  if (
+    !previewText &&
+    !fieldDisplay &&
+    (label === 'Auto TOC (updates when opened in Word)' || label === 'Field end marker')
+  ) {
+    attrs.class += ' doc-protected-sectbreak'
+    return ['div', attrs, ['span', { class: 'doc-sectbreak-label' }, String(label)]]
   }
   if (blockType === 'image' && imageDataUrl) {
     const { imageWidthPx, imageHeightPx, imageAlign, imageWrap } = node.attrs
@@ -1374,6 +1419,7 @@ function protectedDomSpec(node: PmNode): DomSpec {
       attrs,
       moveHandleSpec(t('editorMoveChart')),
       renderChartSpec(chartDisplay as ChartDisplay),
+      ['span', { class: 'box-resize-handle', contenteditable: 'false' }],
     ]
   }
   // OLE embed with a packaged preview picture: show the picture with a
@@ -1905,6 +1951,9 @@ function mountTextboxEditors(
       if (sub && !sub.isDestroyed) sub.commands.setContent(textboxDocJson(box))
       const el = boxEls[i]
       if (el) el.setAttribute('style', textboxBoxStyle(box))
+      // corner resize only rewrites the attrs; without refreshing the minimum
+      // the next autofit would shrink the box back below the resized height
+      minHeights[i] = box.minHeightPx ?? box.heightPx
       measuredHeights[i] = box.heightPx
     })
   }
@@ -1936,6 +1985,98 @@ function imageResizePlugin(): Plugin {
       handleDOMEvents: {
         mousedown: (view, event) => {
           const target = event.target as HTMLElement
+          if (target.classList?.contains('box-resize-handle')) {
+            const boxWrapper = target.closest('.doc-protected') as HTMLElement | null
+            const isChart = !!boxWrapper?.classList.contains('doc-protected-chart')
+            const boxEl = boxWrapper?.querySelector(
+              isChart ? '.doc-chart-canvas svg' : '.doc-textbox',
+            ) as HTMLElement | null
+            if (!boxWrapper || !boxEl) return false
+            let boxPos = -1
+            view.state.doc.descendants((node, p) => {
+              if (boxPos !== -1) return false
+              if (node.type.name === 'docProtected' && view.nodeDOM(p) === boxWrapper) boxPos = p
+              return boxPos === -1
+            })
+            if (boxPos === -1) return false
+            const attrs = view.state.doc.nodeAt(boxPos)?.attrs
+            const boxes = attrs?.textboxes as TextboxDisplay[] | null
+            const chart = attrs?.chartDisplay as ChartDisplay | null
+            if (!isChart && (!Array.isArray(boxes) || boxes.length !== 1)) return false
+            if (isChart && !chart) return false
+            event.preventDefault()
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, boxPos)))
+
+            const zoomEl = document.querySelector('.doc-zoom') as HTMLElement | null
+            const zoom = zoomEl ? parseFloat(getComputedStyle(zoomEl).zoom || '1') || 1 : 1
+            const startRect = boxEl.getBoundingClientRect()
+            const startW = isChart
+              ? startRect.width / zoom
+              : parseFloat(getComputedStyle(boxEl).width) || boxes![0].widthPx || 189
+            const startH = isChart
+              ? startRect.height / zoom
+              : parseFloat(getComputedStyle(boxEl).height) || boxes![0].heightPx || 113
+            const startX = event.clientX
+            const startY = event.clientY
+
+            // horizontal lines resize in length only (their saved extent is zero-height)
+            const lockH = !isChart && isStraightLineKind(boxes![0].prst)
+            const minW = isChart ? 120 : 24
+            const minH = isChart ? 80 : 8
+            // charts never draw wider than the render cap, so don't let the model exceed it
+            const maxW = isChart ? CHART_MAX_WIDTH_PX : Infinity
+            const sizeAt = (e: MouseEvent) => ({
+              w: Math.min(maxW, Math.max(minW, startW + (e.clientX - startX) / zoom)),
+              h: lockH ? startH : Math.max(minH, startH + (e.clientY - startY) / zoom),
+            })
+            const onMove = (e: MouseEvent) => {
+              const { w, h } = sizeAt(e)
+              boxEl.style.width = `${w}px`
+              boxEl.style.height = `${h}px`
+            }
+            const onUp = (e: MouseEvent) => {
+              window.removeEventListener('mousemove', onMove)
+              window.removeEventListener('mouseup', onUp)
+              const { w, h } = sizeAt(e)
+              const node = view.state.doc.nodeAt(boxPos)
+              if (!node) return
+              if (isChart) {
+                const display = node.attrs.chartDisplay as ChartDisplay | null
+                if (!display) return
+                view.dispatch(
+                  view.state.tr.setNodeMarkup(boxPos, undefined, {
+                    ...node.attrs,
+                    chartDisplay: {
+                      ...display,
+                      widthPx: Math.round(w),
+                      heightPx: Math.round(h),
+                    },
+                  }),
+                )
+                return
+              }
+              const box = (node.attrs.textboxes as TextboxDisplay[] | null)?.[0]
+              if (!box) return
+              // straight lines keep their zero-height extent: never give them a heightPx
+              const next = lockH
+                ? { ...box, widthPx: Math.round(w) }
+                : {
+                    ...box,
+                    widthPx: Math.round(w),
+                    heightPx: Math.round(h),
+                    minHeightPx: Math.round(h),
+                  }
+              view.dispatch(
+                view.state.tr.setNodeMarkup(boxPos, undefined, {
+                  ...node.attrs,
+                  textboxes: [next],
+                }),
+              )
+            }
+            window.addEventListener('mousemove', onMove)
+            window.addEventListener('mouseup', onUp)
+            return true
+          }
           if (!target.classList?.contains('img-resize-handle')) return false
           const wrapper = target.closest('.doc-protected') as HTMLElement | null
           const img = wrapper?.querySelector('img.doc-protected-img') as HTMLImageElement | null
@@ -2005,10 +2146,13 @@ function floatingObjectDragPlugin(): Plugin {
           if (event.button !== 0) return false
           const target = event.target as HTMLElement | null
           if (!target) return false
-          // Only activate on the move handle of an image block
+          // Activate on the move handle of an image block, or (Word parity)
+          // anywhere on a textbox/shape body — its text isn't edited in place,
+          // so the body gesture is unambiguous
           const handle = target.closest('.doc-move-handle') as HTMLElement | null
-          if (!handle) return false
-          const wrapper = handle.closest('.doc-protected') as HTMLElement | null
+          const body = handle ? null : (target.closest('.doc-textbox') as HTMLElement | null)
+          if (!handle && !body) return false
+          const wrapper = (handle ?? body)!.closest('.doc-protected') as HTMLElement | null
           if (!wrapper) return false
 
           // Find the ProseMirror node position
@@ -2024,6 +2168,10 @@ function floatingObjectDragPlugin(): Plugin {
           const isImage = node.attrs.blockType === 'image'
           const isTextbox = Array.isArray(node.attrs.textboxes) && node.attrs.textboxes.length > 0
           if (!isImage && !isTextbox) return false
+          // Body activation is for prst shapes only: plain text boxes keep
+          // click-to-type, images keep their native behavior
+          const isShapeBody = isTextbox && !!(node.attrs.textboxes as TextboxDisplay[])[0]?.prst
+          if (!handle && !isShapeBody) return false
 
           const isFloating = !!node.attrs.imageWrap
           const hasNumericOffset =
@@ -2049,9 +2197,14 @@ function floatingObjectDragPlugin(): Plugin {
             isTextbox ? '.doc-textbox' : '.doc-protected-img',
           ) as HTMLElement | null
 
+          // 3px threshold keeps plain clicks (select, first click of a
+          // double-click-to-edit) from nudging the object
+          let dragging = false
           const onMove = (e: MouseEvent) => {
             const dx = (e.clientX - startX) / zoom
             const dy = (e.clientY - startY) / zoom
+            if (!dragging && Math.abs(dx) < 3 && Math.abs(dy) < 3) return
+            dragging = true
             if (visual) visual.style.transform = `translate(${dx}px, ${dy}px)`
           }
 
@@ -2062,8 +2215,8 @@ function floatingObjectDragPlugin(): Plugin {
 
             const dx = (e.clientX - startX) / zoom
             const dy = (e.clientY - startY) / zoom
-            // Only update if actually moved (≥1 px)
-            if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return
+            // Only commit a real drag (past the threshold)
+            if (!dragging) return
 
             const newX = Math.round(startOffsetX + dx * EMU_PER_PX)
             const newY = Math.round(startOffsetY + dy * EMU_PER_PX)
@@ -2236,4 +2389,5 @@ export const editorExtensions = [
   MoveRevisionExtension,
   PPrChangeExtension,
   RevisionOriginalExtension,
+  AutoDirectionExtension,
 ]

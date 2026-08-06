@@ -1,5 +1,5 @@
 /**
- * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
+ * HermesOffice — fork de HermesOffice (genspark-ai/hermesoffice, Apache-2.0,
  * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
  * atribuição original preservada em NOTICE.
  */
@@ -12,6 +12,7 @@ import type { AiSettings, AttachmentAddResult, AttachmentMeta } from '../../shar
 import { ATTACHMENT_IMAGE_EXTS } from '../../shared/ipc'
 import type { PmNode } from '../editor/convert'
 import { findNumId, type NumIds } from './protocol'
+import { markDocSeen } from './tools'
 import { createDocsSkill } from './docs-skill'
 import { applyRevisionsBy } from '../editor/revisions'
 import { DOCS_AGENT_MAX_TURNS, DOCS_CONTINUE_INSTRUCTION } from './continuation'
@@ -22,8 +23,8 @@ import { useI18n, t as tModule, aiLangDirective, type StringKey } from '../i18n/
 const HERMES_COMMANDS = `
 # Hermes commands
 - Skill invocation: when the user writes /<skill-name> or @<skill-name> (e.g. /board-intelligence), load that skill with skill_view (use skills_list to find it when the name is approximate) and follow its instructions for the current task. Prefer the exact match; resolve ambiguity with the closest available skill.
-- Document reports: when the user asks you to read a document (pdf/pptx/docx/xlsx) and produce a report, follow this flow: (1) read the document with genoffice_extract_text; (2) write the report as a new .docx with genoffice_docx_create; (3) open it in the app with genoffice_app_open_file so it opens in a new tab; (4) reply with the report file path in the chat.
-- Use these genoffice_* tools for file I/O even when the app-specific tools (block/page tools) are unavailable.`
+- Document reports: when the user asks you to read a document (pdf/pptx/docx/xlsx) and produce a report, follow this flow: (1) read the document with hermesoffice_extract_text; (2) write the report as a new .docx with hermesoffice_docx_create; (3) open it in the app with hermesoffice_app_open_file so it opens in a new tab; (4) reply with the report file path in the chat.
+- Use these hermesoffice_* tools for file I/O even when the app-specific tools (block/page tools) are unavailable.`
 import { Markdown } from '@hermesoffice/ui'
 import { AiComposer, AiTypingIndicator } from '@hermesoffice/ui'
 import { HermesMark } from '../components/icons'
@@ -31,13 +32,16 @@ import sendEnterOn from '../assets/send-enter-on.png'
 import sendEnterOff from '../assets/send-enter-off.png'
 import sendStop from '../assets/send-stop.png'
 import attachIcon from '../assets/attach-icon.png'
-import {
-  IconClock,
-  IconNewChat,
-  IconPaperclip,
-  IconRefresh,
-  IconSidebarCollapse,
-} from '../components/icons'
+import filePdfIcon from '../assets/file-pdf.png'
+import fileWordIcon from '../assets/file-word.png'
+import fileExcelIcon from '../assets/file-excel.png'
+import filePptIcon from '../assets/file-ppt.png'
+import fileImageIcon from '../assets/file-image.png'
+import fileVideoIcon from '../assets/file-video.png'
+import fileVoiceIcon from '../assets/file-voice.png'
+import fileDocumentIcon from '../assets/file-document.png'
+import fileGeneralIcon from '../assets/file-general.png'
+import { IconClock, IconNewChat, IconSidebarCollapse } from '../components/icons'
 
 interface Snapshot {
   label: string
@@ -127,6 +131,86 @@ const PASTE_MIME_EXT: Record<string, string> = {
   'image/webp': 'webp',
 }
 
+/** File-type icons for attachment cards (Genspark attachment icon set); exts the
+ *  attachment allowlist doesn't accept yet are mapped ahead so they light up when added */
+const ATTACHMENT_CARD_ICON_GROUPS: [icon: string, exts: string[]][] = [
+  [fileWordIcon, ['doc', 'docx']],
+  [fileExcelIcon, ['xls', 'xlsx', 'csv', 'tsv']],
+  [filePptIcon, ['ppt', 'pptx']],
+  [filePdfIcon, ['pdf']],
+  [fileImageIcon, ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'tiff', 'heic']],
+  [fileVideoIcon, ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']],
+  [fileVoiceIcon, ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus']],
+  [
+    fileDocumentIcon,
+    [
+      'txt',
+      'md',
+      'markdown',
+      'rtf',
+      'log',
+      'json',
+      'yaml',
+      'yml',
+      'xml',
+      'html',
+      'htm',
+      'js',
+      'ts',
+      'tsx',
+      'jsx',
+      'py',
+      'java',
+      'c',
+      'h',
+      'cpp',
+      'go',
+      'rs',
+      'rb',
+      'sh',
+      'sql',
+      'css',
+    ],
+  ],
+]
+
+const ATTACHMENT_CARD_ICONS: Record<string, string> = Object.fromEntries(
+  ATTACHMENT_CARD_ICON_GROUPS.flatMap(([icon, exts]) => exts.map((ext) => [ext, icon])),
+)
+
+function AttachmentCardIcon({ ext }: { ext: string }) {
+  return <img src={ATTACHMENT_CARD_ICONS[ext] ?? fileGeneralIcon} alt="" aria-hidden />
+}
+
+/** Card name slot width: 190 card - 2 border - 8/14 padding - 40 icon - 10 gap */
+const CARD_NAME_MAX_WIDTH = 116
+let cardNameCtx: CanvasRenderingContext2D | null = null
+
+/** Ellipsize like the design: cut at the limit, strip trailing -_./spaces so
+ *  punctuation never sits against the …; CSS text-overflow stays as fallback */
+function truncateCardName(name: string): string {
+  cardNameCtx ??= document.createElement('canvas').getContext('2d')
+  if (!cardNameCtx) return name
+  // must match the stack the card name actually renders with (body font in styles.css)
+  cardNameCtx.font =
+    "500 13px 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif"
+  if (cardNameCtx.measureText(name).width <= CARD_NAME_MAX_WIDTH) return name
+  let lo = 1
+  let hi = name.length
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (cardNameCtx.measureText(`${name.slice(0, mid)}…`).width <= CARD_NAME_MAX_WIDTH) lo = mid
+    else hi = mid - 1
+  }
+  return `${name.slice(0, lo).replace(/[-_.\s]+$/, '')}…`
+}
+
+function formatAttachmentSize(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+    : `${(bytes / 1024).toFixed(2)} KB`
+}
+
 /** author name on AI-generated tracked revisions (accept/reject via Review) */
 export const AI_REVISION_AUTHOR = 'AI Assistant'
 
@@ -175,6 +259,45 @@ export function AiPanel({
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([])
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
+  /** data-URL previews for image attachments, keyed by path (Genspark composer thumbnails) */
+  const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({})
+  /** image paths with a read already issued — one readAttachmentImage per attach, even while pending */
+  const previewRequestedRef = useRef(new Set<string>())
+  useEffect(() => {
+    const alive = new Set(attachments.map((a) => a.path))
+    // drop previews (and request markers) of removed attachments, so memory is reclaimed and a re-attach re-reads
+    setAttachmentPreviews((prev) => {
+      const stale = Object.keys(prev).filter((p) => !alive.has(p))
+      if (stale.length === 0) return prev
+      const next = { ...prev }
+      for (const p of stale) delete next[p]
+      return next
+    })
+    for (const p of previewRequestedRef.current) {
+      if (!alive.has(p)) previewRequestedRef.current.delete(p)
+    }
+    for (const a of attachments) {
+      if (!ATTACHMENT_IMAGE_EXTS.has(a.ext) || previewRequestedRef.current.has(a.path)) continue
+      previewRequestedRef.current.add(a.path)
+      void window.desktop.readAttachmentImage(a.path).then((r) => {
+        if (!previewRequestedRef.current.has(a.path)) return // removed while the read was in flight
+        if (r.ok && r.base64 && r.mime) {
+          setAttachmentPreviews((prev) => ({
+            ...prev,
+            [a.path]: `data:${r.mime};base64,${r.base64}`,
+          }))
+        }
+      })
+    }
+  }, [attachments])
+  /** paints the strip's scrollbar thumb while the user scrolls it (cleared 800ms after the last event) */
+  const attachScrollFadeRef = useRef(0)
+  const onAttachmentsScroll = (e: React.UIEvent<HTMLDivElement>): void => {
+    const el = e.currentTarget
+    el.classList.add('is-scrolling')
+    window.clearTimeout(attachScrollFadeRef.current)
+    attachScrollFadeRef.current = window.setTimeout(() => el.classList.remove('is-scrolling'), 800)
+  }
   const [dragOver, setDragOver] = useState(false)
   const [panelWidth, setPanelWidth] = useState(loadPanelWidth)
   const [resizing, setResizing] = useState(false)
@@ -231,7 +354,11 @@ export function AiPanel({
       }
     })
     if (silent) tr = tr.setMeta('addToHistory', false)
-    if (touched) view.dispatch(tr)
+    if (touched) {
+      view.dispatch(tr)
+      // AI-pipeline housekeeping, not a user edit: keep the freshness baseline current
+      markDocSeen(editorRef.current)
+    }
   }
   /** instruction of the in-flight run, labels its rollback snapshot */
   const instructionRef = useRef('')
@@ -429,11 +556,14 @@ export function AiPanel({
           patchLastAssistant({ streaming: false })
           setChat((prev) => [...prev, { role: 'assistant', text: '', streaming: true }])
         },
-        onDone: ({ text, cancelled, turnLimit }) => {
+        onDone: ({ text, cancelled, turnLimit, truncated }) => {
           // module-level t: the loop instance is created only once; the component's t goes stale with the first-render closure
-          const finalText = turnLimit
+          const baseText = turnLimit
             ? [text, tModule('aiTurnLimit')].filter(Boolean).join('\n\n')
             : text || (cancelled ? tModule('aiStopped') : '')
+          const finalText = truncated
+            ? [baseText, tModule('aiTruncatedNote')].filter(Boolean).join('\n\n')
+            : baseText
           patchLastAssistant((last) => ({
             streaming: false,
             turnLimit,
@@ -445,8 +575,9 @@ export function AiPanel({
           // App listens: a run that generated content into a never-saved document
           // triggers a silent first save with a content-derived file name
           window.dispatchEvent(new Event('ai-docs-run-done'))
-          // persist outside the updater (a double-invoked updater would write history twice); tools stores the whole run's full activity
-          if (finalText && !cancelled) {
+          // persist outside the updater (a double-invoked updater would write history twice); tools stores the whole run's full activity.
+          // Edits-only runs (tools ran, no text) persist too, or the whole turn vanishes from the restored transcript
+          if (!cancelled && (finalText || runToolsRef.current.length > 0)) {
             persistMessage('assistant', finalText, runToolsRef.current)
           }
         },
@@ -574,7 +705,14 @@ export function AiPanel({
     runStartedAtRef.current = Date.now()
     setBusy(true)
     persistMessage('user', instruction, undefined, attachmentsRef.current)
-    void collectImageAttachments().then((images) => loop.run(instruction, images))
+    // a rejected image read must not strand the run (busy would stay true forever): degrade to a no-image send
+    void collectImageAttachments()
+      .catch((): AgentImage[] => {
+        setAttachNotice(t('aiImagesSendFailed'))
+        window.setTimeout(() => setAttachNotice(null), 5000)
+        return []
+      })
+      .then((images) => loop.run(instruction, images))
   }
 
   const cancel = () => loopRef.current?.cancel()
@@ -658,18 +796,28 @@ export function AiPanel({
     setSnapshots((prev) => prev.filter((s) => s !== snapshot))
   }
 
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => resizeCleanupRef.current?.(), [])
+
   /** drag the panel's right edge to resize; panel is flush with the window's left edge */
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
+    const resizer = e.currentTarget
     setResizing(true)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     const onMove = (ev: PointerEvent) => {
       setPanelWidth(clampPanelWidth(ev.clientX))
     }
-    const onUp = () => {
+    let done = false
+    const cleanup = () => {
+      if (done) return
+      done = true
+      resizeCleanupRef.current = null
       window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointerup', cleanup)
+      window.removeEventListener('pointercancel', cleanup)
+      resizer.removeEventListener('lostpointercapture', cleanup)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       setResizing(false)
@@ -678,8 +826,13 @@ export function AiPanel({
         return w
       })
     }
+    resizeCleanupRef.current = cleanup
     window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointerup', cleanup)
+    window.addEventListener('pointercancel', cleanup)
+    // lostpointercapture also fires if the resizer is unmounted mid-drag (panel collapse)
+    resizer.addEventListener('lostpointercapture', cleanup)
+    resizer.setPointerCapture(e.pointerId)
   }
 
   // collapsed: rail only — after all hooks, so the instance and its state survive
@@ -728,7 +881,7 @@ export function AiPanel({
           )}
           {onCollapse && (
             <button className="ai-header-btn" onClick={onCollapse} title={t('aiCollapseTitle')}>
-              <IconSidebarCollapse size={16} />
+              <IconSidebarCollapse size={15} />
             </button>
           )}
         </div>
@@ -871,7 +1024,23 @@ export function AiPanel({
                       aria-label={t('aiRegenerateTitle')}
                       data-tip={t('aiRegenerateTitle')}
                     >
-                      <IconRefresh size={12} />
+                      {/* IconRefresh glyph, restated for this 20px slot: the button CSS
+                          stretches svgs to 20px, and the shared icon's 12px-pinned stroke
+                          painted ~1.8px here — 1 canvas unit paints 1.25px, matching IconCopy */}
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden
+                      >
+                        <path d="M 12.68 6.65 a 4.86 4.86 0 0 0 -9 -1.08 M 3.32 9.35 a 4.86 4.86 0 0 0 9 1.08" />
+                        <path d="M 12.95 3.05 v 2.7 h -2.7 M 3.05 12.95 v -2.7 h 2.7" />
+                      </svg>
                     </button>
                   )}
                 </div>
@@ -907,25 +1076,69 @@ export function AiPanel({
       )}
 
       <div className="ai-composer">
-        {attachments.length > 0 && (
-          <div className="ai-attachments">
-            {attachments.map((a) => (
-              <span key={a.path} className="ai-attachment-chip" title={a.path}>
-                <IconPaperclip size={11} />
-                {a.name}
-                <button
-                  className="ai-attachment-remove"
-                  onClick={() => removeAttachment(a.path)}
-                  title={t('aiRemoveAttachmentTitle')}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
         {attachNotice && <div className="ai-attach-notice">{attachNotice}</div>}
         <AiComposer
+          header={
+            attachments.length > 0 && (
+              <div className="ai-attachments" onScroll={onAttachmentsScroll}>
+                {attachments.map((a) =>
+                  ATTACHMENT_IMAGE_EXTS.has(a.ext) ? (
+                    <span key={a.path} className="ai-attachment-thumb" title={a.path}>
+                      {attachmentPreviews[a.path] ? (
+                        <img src={attachmentPreviews[a.path]} alt={a.name} />
+                      ) : (
+                        <span className="ai-attachment-thumb-pending" aria-hidden>
+                          <img src={fileImageIcon} alt="" />
+                        </span>
+                      )}
+                      <button
+                        className="ai-attachment-thumb-remove"
+                        onClick={() => removeAttachment(a.path)}
+                        title={t('aiRemoveAttachmentTitle')}
+                        aria-label={t('aiRemoveAttachmentTitle')}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 32 32" aria-hidden>
+                          <path
+                            d="M24 9.4L22.6 8L16 14.6L9.4 8L8 9.4l6.6 6.6L8 22.6L9.4 24l6.6-6.6l6.6 6.6l1.4-1.4l-6.6-6.6L24 9.4z"
+                            fill="currentColor"
+                            stroke="currentColor"
+                            strokeWidth="0.25"
+                          />
+                        </svg>
+                      </button>
+                    </span>
+                  ) : (
+                    <span key={a.path} className="ai-attachment-card" title={a.path}>
+                      <span className="ai-attachment-card-icon">
+                        <AttachmentCardIcon ext={a.ext} />
+                      </span>
+                      <span className="ai-attachment-card-meta">
+                        <span className="ai-attachment-card-name">{truncateCardName(a.name)}</span>
+                        <span className="ai-attachment-card-size">
+                          {formatAttachmentSize(a.sizeBytes)}
+                        </span>
+                      </span>
+                      <button
+                        className="ai-attachment-thumb-remove"
+                        onClick={() => removeAttachment(a.path)}
+                        title={t('aiRemoveAttachmentTitle')}
+                        aria-label={t('aiRemoveAttachmentTitle')}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 32 32" aria-hidden>
+                          <path
+                            d="M24 9.4L22.6 8L16 14.6L9.4 8L8 9.4l6.6 6.6L8 22.6L9.4 24l6.6-6.6l6.6 6.6l1.4-1.4l-6.6-6.6L24 9.4z"
+                            fill="currentColor"
+                            stroke="currentColor"
+                            strokeWidth="0.25"
+                          />
+                        </svg>
+                      </button>
+                    </span>
+                  ),
+                )}
+              </div>
+            )
+          }
           value={input}
           busy={busy}
           placeholder={t('aiInputPlaceholder')}

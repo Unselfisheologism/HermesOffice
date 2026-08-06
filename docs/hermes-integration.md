@@ -106,7 +106,7 @@ start the gateway for you (consent-gated).
 | `apps/docs/src/renderer/ai/AiPanel.tsx`                              | Genspark sign-in only for `genspark` provider                    |
 
 When syncing with upstream, these are the only areas that can conflict — the
-`tools/rebrand-hermesoffice.py --check` script flags any "genoffice"
+`tools/rebrand-hermesoffice.py --check` script flags any "hermesoffice"
 reintroduced into the code.
 
 ## Status (roadmap)

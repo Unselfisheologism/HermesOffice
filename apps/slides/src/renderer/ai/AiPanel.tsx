@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import {
   AgentLoop,
   composeSkills,
+  IPC_STREAM_SILENCE_TIMEOUT_MS,
   type AgentImage,
   type ToolDisplay,
 } from '@hermesoffice/agent-core'
@@ -22,25 +23,21 @@ import { renderSlidesToPngBase64 } from '../export-render'
 import { isQcEnabled, mergeQcPages, qcSlidePage, QC_MAX_PAGES } from './slide-qc'
 import { useI18n, t as tGlobal, aiLangDirective, type TFunc } from '../i18n/locale'
 import { Markdown } from '@hermesoffice/ui'
-
-// Fork: convenções do agente Hermes — invocação de skills e relatórios de documentos
-const HERMES_COMMANDS = `
-# Hermes commands
-- Skill invocation: when the user writes /<skill-name> or @<skill-name> (e.g. /board-intelligence), load that skill with skill_view (use skills_list to find it when the name is approximate) and follow its instructions for the current task. Prefer the exact match; resolve ambiguity with the closest available skill.
-- Document reports: when the user asks you to read a document (pdf/pptx/docx/xlsx) and produce a report, follow this flow: (1) read the document with genoffice_extract_text; (2) write the report as a new .docx with genoffice_docx_create; (3) open it in the app with genoffice_app_open_file so it opens in a new tab; (4) reply with the report file path in the chat.
-- Use these genoffice_* tools for file I/O even when the app-specific tools (block/page tools) are unavailable.`
-import { HermesMark } from '../components/icons'
+import { GensparkMark } from '../components/icons'
 import sendEnterOn from '../assets/send-enter-on.png'
 import sendEnterOff from '../assets/send-enter-off.png'
 import sendStop from '../assets/send-stop.png'
 import attachIcon from '../assets/attach-icon.png'
-import {
-  IconClock,
-  IconNewChat,
-  IconPaperclip,
-  IconRefresh,
-  IconSidebarCollapseLeft,
-} from '../components/icons'
+import filePdfIcon from '../assets/file-pdf.png'
+import fileWordIcon from '../assets/file-word.png'
+import fileExcelIcon from '../assets/file-excel.png'
+import filePptIcon from '../assets/file-ppt.png'
+import fileImageIcon from '../assets/file-image.png'
+import fileVideoIcon from '../assets/file-video.png'
+import fileVoiceIcon from '../assets/file-voice.png'
+import fileDocumentIcon from '../assets/file-document.png'
+import fileGeneralIcon from '../assets/file-general.png'
+import { IconClock, IconNewChat, IconRefresh, IconSidebarCollapseLeft } from '../components/icons'
 
 interface ToolActivity {
   name: string
@@ -73,6 +70,86 @@ const PASTE_MIME_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/gif': 'gif',
   'image/webp': 'webp',
+}
+
+/** File-type icons for attachment cards (Genspark attachment icon set); exts the
+ *  attachment allowlist doesn't accept yet are mapped ahead so they light up when added */
+const ATTACHMENT_CARD_ICON_GROUPS: [icon: string, exts: string[]][] = [
+  [fileWordIcon, ['doc', 'docx']],
+  [fileExcelIcon, ['xls', 'xlsx', 'csv', 'tsv']],
+  [filePptIcon, ['ppt', 'pptx']],
+  [filePdfIcon, ['pdf']],
+  [fileImageIcon, ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'tiff', 'heic']],
+  [fileVideoIcon, ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']],
+  [fileVoiceIcon, ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus']],
+  [
+    fileDocumentIcon,
+    [
+      'txt',
+      'md',
+      'markdown',
+      'rtf',
+      'log',
+      'json',
+      'yaml',
+      'yml',
+      'xml',
+      'html',
+      'htm',
+      'js',
+      'ts',
+      'tsx',
+      'jsx',
+      'py',
+      'java',
+      'c',
+      'h',
+      'cpp',
+      'go',
+      'rs',
+      'rb',
+      'sh',
+      'sql',
+      'css',
+    ],
+  ],
+]
+
+const ATTACHMENT_CARD_ICONS: Record<string, string> = Object.fromEntries(
+  ATTACHMENT_CARD_ICON_GROUPS.flatMap(([icon, exts]) => exts.map((ext) => [ext, icon])),
+)
+
+function AttachmentCardIcon({ ext }: { ext: string }) {
+  return <img src={ATTACHMENT_CARD_ICONS[ext] ?? fileGeneralIcon} alt="" aria-hidden />
+}
+
+/** Card name slot width: 190 card - 2 border - 8/14 padding - 40 icon - 10 gap */
+const CARD_NAME_MAX_WIDTH = 116
+let cardNameCtx: CanvasRenderingContext2D | null = null
+
+/** Ellipsize like the design: cut at the limit, strip trailing -_./spaces so
+ *  punctuation never sits against the …; CSS text-overflow stays as fallback */
+function truncateCardName(name: string): string {
+  cardNameCtx ??= document.createElement('canvas').getContext('2d')
+  if (!cardNameCtx) return name
+  // must match the stack the card name actually renders with (body font in styles.css)
+  cardNameCtx.font =
+    "500 13px 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif"
+  if (cardNameCtx.measureText(name).width <= CARD_NAME_MAX_WIDTH) return name
+  let lo = 1
+  let hi = name.length
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (cardNameCtx.measureText(`${name.slice(0, mid)}…`).width <= CARD_NAME_MAX_WIDTH) lo = mid
+    else hi = mid - 1
+  }
+  return `${name.slice(0, lo).replace(/[-_.\s]+$/, '')}…`
+}
+
+function formatAttachmentSize(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+    : `${(bytes / 1024).toFixed(2)} KB`
 }
 
 /** Cap on tool args/output persisted to the transcript (the store layer has another 16k truncation fallback) */
@@ -124,7 +201,7 @@ interface ChatEntry {
   streaming?: boolean
   /** the run failed and this user message was rolled back out of the model context */
   undelivered?: boolean
-  /** the run failed because Hermes is signed out — render an inline sign-in button */
+  /** the run failed because Genspark is signed out — render an inline sign-in button */
   loginRequired?: boolean
   tools?: ToolActivity[]
   /** Generation progress card (only one per turn, replaced in real time) */
@@ -258,6 +335,45 @@ export function AiPanel({
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([])
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
+  /** data-URL previews for image attachments, keyed by path (Genspark composer thumbnails) */
+  const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({})
+  /** image paths with a read already issued — one readAttachmentImage per attach, even while pending */
+  const previewRequestedRef = useRef(new Set<string>())
+  useEffect(() => {
+    const alive = new Set(attachments.map((a) => a.path))
+    // drop previews (and request markers) of removed attachments, so memory is reclaimed and a re-attach re-reads
+    setAttachmentPreviews((prev) => {
+      const stale = Object.keys(prev).filter((p) => !alive.has(p))
+      if (stale.length === 0) return prev
+      const next = { ...prev }
+      for (const p of stale) delete next[p]
+      return next
+    })
+    for (const p of previewRequestedRef.current) {
+      if (!alive.has(p)) previewRequestedRef.current.delete(p)
+    }
+    for (const a of attachments) {
+      if (!ATTACHMENT_IMAGE_EXTS.has(a.ext) || previewRequestedRef.current.has(a.path)) continue
+      previewRequestedRef.current.add(a.path)
+      void window.desktop.readAttachmentImage(a.path).then((r) => {
+        if (!previewRequestedRef.current.has(a.path)) return // removed while the read was in flight
+        if (r.ok && r.base64 && r.mime) {
+          setAttachmentPreviews((prev) => ({
+            ...prev,
+            [a.path]: `data:${r.mime};base64,${r.base64}`,
+          }))
+        }
+      })
+    }
+  }, [attachments])
+  /** paints the strip's scrollbar thumb while the user scrolls it (cleared 800ms after the last event) */
+  const attachScrollFadeRef = useRef(0)
+  const onAttachmentsScroll = (e: React.UIEvent<HTMLDivElement>): void => {
+    const el = e.currentTarget
+    el.classList.add('is-scrolling')
+    window.clearTimeout(attachScrollFadeRef.current)
+    attachScrollFadeRef.current = window.setTimeout(() => el.classList.remove('is-scrolling'), 800)
+  }
   const [dragOver, setDragOver] = useState(false)
   const [panelWidth, setPanelWidth] = useState(loadPanelWidth)
   const asideRef = useRef<HTMLElement>(null)
@@ -538,16 +654,29 @@ export function AiPanel({
         }
         const onAbort = () =>
           finish({ ok: false, error: tGlobal('aiErrStopped'), errKind: 'stopped' }, true)
-        const to = setTimeout(
-          () =>
-            finish(
-              { ok: false, error: tGlobal('aiErrTimeout', { ms: timeoutMs }), errKind: 'timeout' },
-              true,
-            ),
-          timeoutMs,
-        )
+        // Silence watchdog, not a total-duration cap: long generations legitimately run
+        // for many minutes, and the main process re-arms us with keepalive pings on wire
+        // activity. Firing means the turn is dead (main stall / lost chunks).
+        let to: ReturnType<typeof setTimeout> | undefined
+        const armTimeout = () => {
+          clearTimeout(to)
+          to = setTimeout(
+            () =>
+              finish(
+                {
+                  ok: false,
+                  error: tGlobal('aiErrTimeout', { ms: timeoutMs }),
+                  errKind: 'timeout',
+                },
+                true,
+              ),
+            timeoutMs,
+          )
+        }
+        armTimeout()
         const unsub = window.slidesApi.onAiStream((chunk) => {
           if (chunk.requestId !== requestId) return
+          armTimeout() // any chunk (including pings) proves the turn is alive
           if (chunk.type === 'delta') buf += chunk.text ?? ''
           else if (chunk.type === 'done')
             finish(
@@ -556,7 +685,14 @@ export function AiPanel({
                 : { ok: false, text: buf, error: tGlobal('aiErrEmptyOutput'), errKind: 'empty' },
             )
           else if (chunk.type === 'error')
-            finish({ ok: false, error: chunk.error ?? tGlobal('aiErrUnknown') })
+            finish({
+              ok: false,
+              error: chunk.error ?? tGlobal('aiErrUnknown'),
+              // Empty gateway streams surface as errors now (ai-provider stream.ts
+              // tags them with this suffix); keep classifying them as empty output
+              // so retry ladders fail fast instead of burning billed attempts
+              ...(chunk.error?.includes('(empty stream)') ? { errKind: 'empty' as const } : {}),
+            })
         })
         signal?.addEventListener('abort', onAbort, { once: true })
         // If invoke itself rejects (IPC-layer failure), fail immediately instead of waiting out the timeout
@@ -580,7 +716,7 @@ export function AiPanel({
     const runLlmOnce = async (
       system: string,
       user: string,
-      timeoutMs = 150000,
+      timeoutMs = IPC_STREAM_SILENCE_TIMEOUT_MS,
       useGenModel = true,
       signal?: AbortSignal,
       maxTokens?: number,
@@ -768,7 +904,7 @@ export function AiPanel({
         const q = a.questionnaire ? `\nUser questionnaire answers: ${a.questionnaire}` : ''
         const hint = a.styleHint ? `\nStyle preference: ${a.styleHint}` : ''
         const userMsg = `Topic and style preferences: ${a.topic}${hint}${q}\nOutput the Style Skill.`
-        const r = await runLlmOnce(sys, userMsg, 90000, true, a.signal)
+        const r = await runLlmOnce(sys, userMsg, undefined, true, a.signal)
         return r.ok && r.text
           ? { ok: true, styleSkill: r.text.trim() }
           : { ok: false, error: r.error ?? tGlobal('aiErrEmptyOutput') }
@@ -818,7 +954,7 @@ export function AiPanel({
         let lastErr = tGlobal('aiErrEmptyOutput')
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           if (a.signal?.aborted) return { ok: false, error: tGlobal('aiErrStopped') }
-          const r = await runLlmOnce(sys, userMsg, 90000, true, a.signal)
+          const r = await runLlmOnce(sys, userMsg, undefined, true, a.signal)
           if (!r.ok || !r.text) {
             lastErr = r.error ?? tGlobal('aiErrEmptyOutput')
             // Empty output/timeout doesn't burn another attempt; request-level errors may retry
@@ -932,9 +1068,7 @@ export function AiPanel({
     accessRef.current = access
     loopRef.current = new AgentLoop({
       transport: createElectronTransport(() => settingsRef.current),
-      systemSuffix: () => aiLangDirective() + HERMES_COMMANDS,
-      // Fork: stable per-document session id → X-Hermes-Session-Id keeps ONE gateway session per deck
-      sessionId: () => chatRefIds.current?.chatId,
+      systemSuffix: aiLangDirective,
       skill: composeSkills('slides+files', '', [
         createSlidesSkill(access),
         createFilesSkill(
@@ -992,12 +1126,27 @@ export function AiPanel({
           const finalText = turnLimit
             ? [text, tGlobal('aiTurnLimit')].filter(Boolean).join('\n\n')
             : text || (cancelled ? tGlobal('aiStoppedNote') : '')
-          patchLastAssistant((last) => ({
-            streaming: false,
-            text: finalText || (last.tools?.length ? last.text : tGlobal('aiNoResponse')),
-            // A stop mid-tool can leave a running placeholder behind — drop it
-            tools: last.tools?.filter((tl) => !tl.running),
-          }))
+          const ranTools = runToolsRef.current.length > 0
+          setChat((prev) => {
+            const next = [...prev]
+            const last = next.at(-1)
+            if (!last || last.role !== 'assistant') return prev
+            // Tool-heavy runs often end with an empty closing turn. Earlier
+            // bubbles already show the executed work — drop the empty trailing
+            // bubble instead of mislabeling the whole run as "no content".
+            if (!finalText && !last.text && !last.tools?.length && ranTools) {
+              next.pop()
+              return next
+            }
+            next[next.length - 1] = {
+              ...last,
+              streaming: false,
+              text: finalText || (last.tools?.length ? last.text : tGlobal('aiNoResponse')),
+              // A stop mid-tool can leave a running placeholder behind — drop it
+              tools: last.tools?.filter((tl) => !tl.running),
+            }
+            return next
+          })
           void finishHistoryBatch().finally(() => {
             setBusy(false)
             // Post-generation layout QC: only after a completed run that landed generated pages
@@ -1036,7 +1185,7 @@ export function AiPanel({
           // Signed-out failures get an inline sign-in button; detected via
           // gsk status rather than matching the localized error text
           void window.slidesApi
-            .aiGatewayStatus()
+            .aiGskStatus()
             .then((status) => {
               if (status.loggedIn) return
               setChat((prev) => {
@@ -1355,18 +1504,28 @@ export function AiPanel({
   const removeAttachment = (path: string) =>
     setAttachments((prev) => prev.filter((a) => a.path !== path))
 
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => resizeCleanupRef.current?.(), [])
+
   /** Drag the right edge to resize: the panel is flush with the window's left edge, so width = clientX */
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
+    const resizer = e.currentTarget
     setResizing(true)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     const onMove = (ev: PointerEvent) => {
       setPanelWidth(clampPanelWidth(ev.clientX))
     }
-    const onUp = () => {
+    let done = false
+    const cleanup = () => {
+      if (done) return
+      done = true
+      resizeCleanupRef.current = null
       window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointerup', cleanup)
+      window.removeEventListener('pointercancel', cleanup)
+      resizer.removeEventListener('lostpointercapture', cleanup)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       setResizing(false)
@@ -1375,15 +1534,20 @@ export function AiPanel({
         return w
       })
     }
+    resizeCleanupRef.current = cleanup
     window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointerup', cleanup)
+    window.addEventListener('pointercancel', cleanup)
+    // lostpointercapture also fires if the resizer is unmounted mid-drag (panel collapse)
+    resizer.addEventListener('lostpointercapture', cleanup)
+    resizer.setPointerCapture(e.pointerId)
   }
 
   // collapsed: rail only — after all hooks, so the instance and its state survive
   if (!open) {
     return (
       <button className="ai-rail" title={t('appAiRailExpand')} onClick={onExpand}>
-        <HermesMark size={22} />
+        <GensparkMark size={22} />
       </button>
     )
   }
@@ -1410,11 +1574,11 @@ export function AiPanel({
         onPointerDown={startResize}
         role="separator"
         aria-orientation="vertical"
-        aria-label="Hermes AI"
+        aria-label="Genspark AI"
       />
       <div className="ai-panel-header">
         <span className="ai-panel-title">
-          <HermesMark size={22} />
+          <GensparkMark size={22} />
           {t('aiPanelTitle')}
         </span>
         <div className="ai-panel-header-actions">
@@ -1514,11 +1678,8 @@ export function AiPanel({
                 <div className="ai-msg-error">{t('aiMsgError', { error: entry.error })}</div>
               )}
               {entry.loginRequired && (
-                <button
-                  className="ai-login-btn"
-                  onClick={() => void window.slidesApi.aiGatewayLogin()}
-                >
-                  {t('aiGatewayLoginBtn')}
+                <button className="ai-login-btn" onClick={() => void window.slidesApi.aiGskLogin()}>
+                  {t('aiGskLoginBtn')}
                 </button>
               )}
               {entry.deckProgress && <DeckProgressCard progress={entry.deckProgress} />}
@@ -1635,25 +1796,67 @@ export function AiPanel({
         </div>
       ) : (
         <div className="ai-composer">
-          {attachments.length > 0 && (
-            <div className="ai-attachments">
-              {attachments.map((a) => (
-                <span key={a.path} className="ai-attachment-chip" title={a.path}>
-                  <IconPaperclip size={11} />
-                  {a.name}
-                  <button
-                    className="ai-attachment-remove"
-                    onClick={() => removeAttachment(a.path)}
-                    title={t('aiRemoveAttachment')}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
           {attachNotice && <div className="ai-attach-notice">{attachNotice}</div>}
           <div className="ai-input-box">
+            {attachments.length > 0 && (
+              <div className="ai-attachments" onScroll={onAttachmentsScroll}>
+                {attachments.map((a) =>
+                  ATTACHMENT_IMAGE_EXTS.has(a.ext) ? (
+                    <span key={a.path} className="ai-attachment-thumb" title={a.path}>
+                      {attachmentPreviews[a.path] ? (
+                        <img src={attachmentPreviews[a.path]} alt={a.name} />
+                      ) : (
+                        <span className="ai-attachment-thumb-pending" aria-hidden>
+                          <img src={fileImageIcon} alt="" />
+                        </span>
+                      )}
+                      <button
+                        className="ai-attachment-thumb-remove"
+                        onClick={() => removeAttachment(a.path)}
+                        title={t('aiRemoveAttachment')}
+                        aria-label={t('aiRemoveAttachment')}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 32 32" aria-hidden>
+                          <path
+                            d="M24 9.4L22.6 8L16 14.6L9.4 8L8 9.4l6.6 6.6L8 22.6L9.4 24l6.6-6.6l6.6 6.6l1.4-1.4l-6.6-6.6L24 9.4z"
+                            fill="currentColor"
+                            stroke="currentColor"
+                            strokeWidth="0.25"
+                          />
+                        </svg>
+                      </button>
+                    </span>
+                  ) : (
+                    <span key={a.path} className="ai-attachment-card" title={a.path}>
+                      <span className="ai-attachment-card-icon">
+                        <AttachmentCardIcon ext={a.ext} />
+                      </span>
+                      <span className="ai-attachment-card-meta">
+                        <span className="ai-attachment-card-name">{truncateCardName(a.name)}</span>
+                        <span className="ai-attachment-card-size">
+                          {formatAttachmentSize(a.sizeBytes)}
+                        </span>
+                      </span>
+                      <button
+                        className="ai-attachment-thumb-remove"
+                        onClick={() => removeAttachment(a.path)}
+                        title={t('aiRemoveAttachment')}
+                        aria-label={t('aiRemoveAttachment')}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 32 32" aria-hidden>
+                          <path
+                            d="M24 9.4L22.6 8L16 14.6L9.4 8L8 9.4l6.6 6.6L8 22.6L9.4 24l6.6-6.6l6.6 6.6l1.4-1.4l-6.6-6.6L24 9.4z"
+                            fill="currentColor"
+                            stroke="currentColor"
+                            strokeWidth="0.25"
+                          />
+                        </svg>
+                      </button>
+                    </span>
+                  ),
+                )}
+              </div>
+            )}
             <textarea
               ref={inputRef}
               value={input}

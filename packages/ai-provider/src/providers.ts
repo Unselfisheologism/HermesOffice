@@ -1,12 +1,7 @@
-/**
- * HermesOffice — fork de GenOffice (genspark-ai/genoffice, Apache-2.0,
- * Copyright 2026 Mainfunc, Inc.). Modificações do fork por criptogus;
- * atribuição original preservada em NOTICE.
- */
 import type { AiProviderId, AiProviderMeta, AiSettings, LegacyAiSettings } from './types'
 
 /**
- * Upstream (legacy) server-side LLM proxy endpoints. All three protocols share the
+ * Genspark server-side LLM proxy endpoints. All three protocols share the
  * api_key from the gsk login; model ids follow the proxy's own naming scheme,
  * which differs from the official vendor ids.
  */
@@ -16,7 +11,21 @@ export const GENSPARK_LLM_BASE_URLS = {
   openai: 'https://www.genspark.ai/api/llm_proxy/v1',
 } as const
 
+/** Hermes gateway (local API server) — the fork's default provider */
 export const HERMES_LLM_BASE_URL = 'http://127.0.0.1:8642/v1'
+
+/**
+ * Splits HermesOffice usage out of the proxy's default "Claw" billing bucket
+ * (the backend attributes gsk-key traffic by X-Agent-Type). Only sent to the
+ * Genspark proxy — never to direct vendor APIs.
+ */
+export const GENSPARK_AGENT_TYPE = 'hermesoffice'
+
+export function gensparkAttributionHeaders(baseUrl?: string): Record<string, string> {
+  return baseUrl?.startsWith('https://www.genspark.ai')
+    ? { 'X-Agent-Type': GENSPARK_AGENT_TYPE }
+    : {}
+}
 
 export const AI_PROVIDERS: AiProviderMeta[] = [
   {
@@ -41,7 +50,7 @@ export const AI_PROVIDERS: AiProviderMeta[] = [
       'gemini-3-flash-preview',
     ],
     defaultModel: 'claude-opus-4-7',
-    keyPlaceholder: 'Not required - legacy upstream login',
+    keyPlaceholder: 'Not required - sign in to Genspark',
   },
   {
     id: 'anthropic',
@@ -104,7 +113,7 @@ export function defaultAiSettings(
     providers[meta.id] = {
       apiKey: defaultApiKeys?.[meta.id] ?? '',
       model: meta.defaultModel,
-      baseUrl: meta.defaultBaseUrl ?? (meta.needsBaseUrl ? '' : undefined),
+      baseUrl: meta.needsBaseUrl ? '' : undefined,
     }
   }
   return { provider: 'hermes', providers }

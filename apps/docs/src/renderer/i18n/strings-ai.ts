@@ -17,6 +17,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: '总结这篇文档的主要内容和要点',
     aiPolishBtn: 'AI 润色',
     aiPolishPrompt: '润色全文,使表达更清晰流畅',
+    aiTidyBtn: 'AI 排版',
+    aiTidyPrompt:
+      '整理全文排版,例如修正标题层级、统一列表格式、去除多余的加粗和斜体、为正文补齐首行缩进等;只调整格式,不要改动任何文字内容',
     aiSwitchModelTitle: '切换 AI 模型',
     aiNewChatTitle: '新对话',
     aiCollapseTitle: '收起面板',
@@ -55,9 +58,13 @@ export const aiStrings = defineStrings({
     aiTurnLimit: '（已达单次请求的工具调用轮数上限，以上是基于已完成步骤的回答，可能不完整。）',
     aiStopped: '(已停止)',
     aiNoReply: 'AI 没有返回内容。',
+    aiTruncatedNote: '（回复因长度限制被截断,内容可能不完整。）',
+    aiImagesSendFailed: '图片附件读取失败,本条消息已按无图发送',
     aiImageReadFail: '{name}: 读取失败',
     aiTooManyImages: '图片最多随消息发送 {max} 张,多余的已忽略',
     aiUnknownError: '未知错误',
+    aiTimeoutError: 'AI 请求超时：网络长时间无响应，已停止。请检查网络后重试',
+    aiCreditsExhausted: 'Genspark 积分已用完，请前往 genspark.ai/pricing 充值后重试',
     aiSumReadAttachment: '读取附件',
     aiSumImageAttachment: '图片附件 {name}',
     aiSumRead: '读取 {name}',
@@ -113,6 +120,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Summarize the main content and key points of this document',
     aiPolishBtn: 'AI Polish',
     aiPolishPrompt: 'Polish the whole document to make the writing clearer and more fluent',
+    aiTidyBtn: 'AI Format',
+    aiTidyPrompt:
+      'Tidy up the document formatting — for example fix heading levels, unify list formatting, remove unnecessary bold and italics, and make paragraph indentation consistent. Adjust formatting only — do not change any text content',
     aiSwitchModelTitle: 'Switch AI model',
     aiNewChatTitle: 'New chat',
     aiCollapseTitle: 'Collapse panel',
@@ -154,9 +164,15 @@ export const aiStrings = defineStrings({
       'This task paused before every step was finished. Completed edits are preserved; select Continue to finish the remaining work.',
     aiStopped: '(Stopped)',
     aiNoReply: 'The AI returned no content.',
+    aiTruncatedNote: '(The reply was cut off by the length limit and may be incomplete.)',
+    aiImagesSendFailed: 'Image attachments could not be read; this message was sent without images',
     aiImageReadFail: '{name}: failed to read',
     aiTooManyImages: 'At most {max} images per message; extras were ignored',
     aiUnknownError: 'Unknown error',
+    aiTimeoutError:
+      'AI request timed out: no response from the network, so the run was stopped. Check your connection and try again',
+    aiCreditsExhausted:
+      'Your Genspark credits have run out. Visit genspark.ai/pricing to top up, then try again',
     aiSumReadAttachment: 'Read attachment',
     aiSumImageAttachment: 'Image attachment {name}',
     aiSumRead: 'Read {name}',
@@ -212,6 +228,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'この文書の主な内容と要点を要約してください',
     aiPolishBtn: 'AI 推敲',
     aiPolishPrompt: '文書全体を推敲し、より明確で読みやすい文章にしてください',
+    aiTidyBtn: 'AI 書式整理',
+    aiTidyPrompt:
+      '文書全体の書式を整えてください。例えば見出しレベルの修正、リスト形式の統一、不要な太字・斜体の削除、本文段落の字下げの調整など。書式のみを変更し、本文の文字は一切変更しないでください',
     aiSwitchModelTitle: 'AI モデルを切り替え',
     aiNewChatTitle: '新しいチャット',
     aiCollapseTitle: 'パネルを折りたたむ',
@@ -253,9 +272,16 @@ export const aiStrings = defineStrings({
       '（1 回のリクエストのツール呼び出し上限に達したため、ここまでに完了した内容に基づく回答です。不完全な場合があります。）',
     aiStopped: '(停止しました)',
     aiNoReply: 'AI から回答がありませんでした。',
+    aiTruncatedNote: '（返信は長さ制限により途中で打ち切られ、不完全な可能性があります。）',
+    aiImagesSendFailed:
+      '画像添付ファイルを読み込めなかったため、このメッセージは画像なしで送信されました',
     aiImageReadFail: '{name}: 読み取りに失敗しました',
     aiTooManyImages: '画像は 1 メッセージにつき最大 {max} 枚までです。超過分は無視されました',
     aiUnknownError: '不明なエラー',
+    aiTimeoutError:
+      'AIリクエストがタイムアウトしました：ネットワークからの応答がないため中断しました。接続を確認して再試行してください',
+    aiCreditsExhausted:
+      'Gensparkクレジットを使い切りました。genspark.ai/pricing でチャージしてから再試行してください',
     aiSumReadAttachment: '添付ファイルを読み取り',
     aiSumImageAttachment: '画像添付 {name}',
     aiSumRead: '{name} を読み取り',
@@ -311,6 +337,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: '이 문서의 주요 내용과 핵심 사항을 요약해 주세요',
     aiPolishBtn: 'AI 다듬기',
     aiPolishPrompt: '문서 전체를 다듬어 더 명확하고 매끄럽게 만들어 주세요',
+    aiTidyBtn: 'AI 서식 정리',
+    aiTidyPrompt:
+      '문서 전체 서식을 정리해 주세요. 예를 들어 제목 수준 수정, 목록 형식 통일, 불필요한 굵게/기울임 제거, 본문 단락 들여쓰기 정리 등. 서식만 조정하고 본문 텍스트는 절대 변경하지 마세요',
     aiSwitchModelTitle: 'AI 모델 전환',
     aiNewChatTitle: '새 대화',
     aiCollapseTitle: '패널 접기',
@@ -352,9 +381,15 @@ export const aiStrings = defineStrings({
       '(요청당 도구 호출 한도에 도달하여, 지금까지 완료한 내용을 기반으로 한 답변입니다. 불완전할 수 있습니다.)',
     aiStopped: '(중지됨)',
     aiNoReply: 'AI가 응답을 반환하지 않았습니다.',
+    aiTruncatedNote: '(응답이 길이 제한으로 잘려 내용이 불완전할 수 있습니다.)',
+    aiImagesSendFailed: '이미지 첨부 파일을 읽을 수 없어 이 메시지는 이미지 없이 전송되었습니다',
     aiImageReadFail: '{name}: 읽기 실패',
     aiTooManyImages: '이미지는 메시지당 최대 {max}장까지 보낼 수 있으며, 초과분은 무시되었습니다',
     aiUnknownError: '알 수 없는 오류',
+    aiTimeoutError:
+      'AI 요청 시간 초과: 네트워크 응답이 없어 중단되었습니다. 연결을 확인한 후 다시 시도해 주세요',
+    aiCreditsExhausted:
+      'Genspark 크레딧을 모두 사용했습니다. genspark.ai/pricing에서 충전한 후 다시 시도해 주세요',
     aiSumReadAttachment: '첨부 파일 읽기',
     aiSumImageAttachment: '이미지 첨부 {name}',
     aiSumRead: '{name} 읽기',
@@ -411,6 +446,9 @@ export const aiStrings = defineStrings({
     aiPolishBtn: 'Amélioration IA',
     aiPolishPrompt:
       "Améliorez l'ensemble du document pour rendre le texte plus clair et plus fluide",
+    aiTidyBtn: 'Mise en forme IA',
+    aiTidyPrompt:
+      "Mettez en ordre la mise en forme du document — par exemple corrigez les niveaux de titres, uniformisez les listes, supprimez les gras et italiques superflus et harmonisez l'indentation des paragraphes. Ne modifiez que la mise en forme, sans changer le texte",
     aiSwitchModelTitle: "Changer de modèle d'IA",
     aiNewChatTitle: 'Nouvelle conversation',
     aiCollapseTitle: 'Réduire le panneau',
@@ -453,9 +491,17 @@ export const aiStrings = defineStrings({
       "(Limite de tours d'appels d'outils atteinte pour cette requête ; la réponse ci-dessus reflète les étapes déjà effectuées et peut être incomplète.)",
     aiStopped: '(Arrêté)',
     aiNoReply: "L'IA n'a renvoyé aucun contenu.",
+    aiTruncatedNote:
+      '(La réponse a été tronquée par la limite de longueur et peut être incomplète.)',
+    aiImagesSendFailed:
+      'Impossible de lire les images jointes ; ce message a été envoyé sans images',
     aiImageReadFail: '{name} : échec de la lecture',
     aiTooManyImages: 'Au plus {max} images par message ; les images en trop ont été ignorées',
     aiUnknownError: 'Erreur inconnue',
+    aiTimeoutError:
+      "Délai de la requête IA dépassé : aucune réponse du réseau, l'exécution a été interrompue. Vérifiez votre connexion et réessayez",
+    aiCreditsExhausted:
+      'Vos crédits Genspark sont épuisés. Rechargez sur genspark.ai/pricing puis réessayez',
     aiSumReadAttachment: 'Lire la pièce jointe',
     aiSumImageAttachment: 'Pièce jointe image {name}',
     aiSumRead: 'Lire {name}',
@@ -511,6 +557,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Fasse den Hauptinhalt und die Kernpunkte dieses Dokuments zusammen',
     aiPolishBtn: 'KI-Feinschliff',
     aiPolishPrompt: 'Überarbeite das gesamte Dokument, damit der Text klarer und flüssiger wird',
+    aiTidyBtn: 'KI-Formatierung',
+    aiTidyPrompt:
+      'Bringe die Formatierung des gesamten Dokuments in Ordnung – zum Beispiel Überschriftenebenen korrigieren, Listen vereinheitlichen, überflüssige Fett- und Kursivauszeichnungen entfernen, Absatzeinzüge angleichen. Passe nur die Formatierung an, ohne den Text zu verändern',
     aiSwitchModelTitle: 'KI-Modell wechseln',
     aiNewChatTitle: 'Neuer Chat',
     aiCollapseTitle: 'Bereich einklappen',
@@ -553,9 +602,17 @@ export const aiStrings = defineStrings({
       '(Limit für Toolaufrufe in dieser Anfrage erreicht; die obige Antwort basiert auf den bisher abgeschlossenen Schritten und ist möglicherweise unvollständig.)',
     aiStopped: '(Gestoppt)',
     aiNoReply: 'Die KI hat keinen Inhalt zurückgegeben.',
+    aiTruncatedNote:
+      '(Die Antwort wurde durch das Längenlimit abgeschnitten und ist möglicherweise unvollständig.)',
+    aiImagesSendFailed:
+      'Bildanhänge konnten nicht gelesen werden; diese Nachricht wurde ohne Bilder gesendet',
     aiImageReadFail: '{name}: Lesen fehlgeschlagen',
     aiTooManyImages: 'Höchstens {max} Bilder pro Nachricht; überzählige wurden ignoriert',
     aiUnknownError: 'Unbekannter Fehler',
+    aiTimeoutError:
+      'Zeitüberschreitung der KI-Anfrage: keine Antwort vom Netzwerk, der Vorgang wurde abgebrochen. Prüfe deine Verbindung und versuche es erneut',
+    aiCreditsExhausted:
+      'Deine Genspark-Credits sind aufgebraucht. Lade unter genspark.ai/pricing auf und versuche es erneut',
     aiSumReadAttachment: 'Anlage lesen',
     aiSumImageAttachment: 'Bildanlage {name}',
     aiSumRead: '{name} lesen',
@@ -611,6 +668,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Resume el contenido principal y los puntos clave de este documento',
     aiPolishBtn: 'Pulido IA',
     aiPolishPrompt: 'Pule todo el documento para que la redacción sea más clara y fluida',
+    aiTidyBtn: 'Formato IA',
+    aiTidyPrompt:
+      'Ordena el formato de todo el documento; por ejemplo, corrige los niveles de título, unifica las listas, elimina negritas y cursivas innecesarias y homogeneiza la sangría de los párrafos. Ajusta solo el formato, sin cambiar el texto',
     aiSwitchModelTitle: 'Cambiar modelo de IA',
     aiNewChatTitle: 'Nueva conversación',
     aiCollapseTitle: 'Contraer panel',
@@ -652,9 +712,17 @@ export const aiStrings = defineStrings({
       '(Se alcanzó el límite de llamadas a herramientas de esta solicitud; la respuesta anterior refleja los pasos completados hasta ahora y puede estar incompleta.)',
     aiStopped: '(Detenido)',
     aiNoReply: 'La IA no devolvió contenido.',
+    aiTruncatedNote:
+      '(La respuesta fue cortada por el límite de longitud y puede estar incompleta.)',
+    aiImagesSendFailed:
+      'No se pudieron leer las imágenes adjuntas; este mensaje se envió sin imágenes',
     aiImageReadFail: '{name}: error de lectura',
     aiTooManyImages: 'Como máximo {max} imágenes por mensaje; las sobrantes se ignoraron',
     aiUnknownError: 'Error desconocido',
+    aiTimeoutError:
+      'La solicitud de IA agotó el tiempo de espera: no hubo respuesta de la red y se detuvo. Comprueba tu conexión e inténtalo de nuevo',
+    aiCreditsExhausted:
+      'Tus créditos de Genspark se han agotado. Recarga en genspark.ai/pricing e inténtalo de nuevo',
     aiSumReadAttachment: 'Leer dato adjunto',
     aiSumImageAttachment: 'Imagen adjunta {name}',
     aiSumRead: 'Leer {name}',
@@ -710,6 +778,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'สรุปเนื้อหาหลักและประเด็นสำคัญของเอกสารนี้',
     aiPolishBtn: 'ขัดเกลาด้วย AI',
     aiPolishPrompt: 'ขัดเกลาเอกสารทั้งฉบับให้อ่านชัดเจนและลื่นไหลขึ้น',
+    aiTidyBtn: 'จัดรูปแบบด้วย AI',
+    aiTidyPrompt:
+      'จัดระเบียบรูปแบบทั้งเอกสาร เช่น แก้ไขระดับหัวข้อ ปรับรูปแบบรายการให้สอดคล้องกัน ลบตัวหนาตัวเอียงที่ไม่จำเป็น และปรับการเยื้องย่อหน้าให้สม่ำเสมอ เป็นต้น ปรับเฉพาะรูปแบบเท่านั้น ห้ามแก้ไขข้อความ',
     aiSwitchModelTitle: 'สลับโมเดล AI',
     aiNewChatTitle: 'การสนทนาใหม่',
     aiCollapseTitle: 'ยุบแผง',
@@ -751,9 +822,15 @@ export const aiStrings = defineStrings({
       '(ถึงขีดจำกัดรอบการเรียกเครื่องมือของคำขอนี้แล้ว คำตอบด้านบนอิงจากขั้นตอนที่เสร็จสิ้นแล้ว อาจไม่สมบูรณ์)',
     aiStopped: '(หยุดแล้ว)',
     aiNoReply: 'AI ไม่ได้ส่งเนื้อหากลับมา',
+    aiTruncatedNote: '(คำตอบถูกตัดเนื่องจากถึงขีดจำกัดความยาว เนื้อหาอาจไม่สมบูรณ์)',
+    aiImagesSendFailed: 'ไม่สามารถอ่านไฟล์รูปภาพแนบได้ ข้อความนี้จึงถูกส่งโดยไม่มีรูปภาพ',
     aiImageReadFail: '{name}: อ่านไม่สำเร็จ',
     aiTooManyImages: 'ส่งรูปได้สูงสุด {max} รูปต่อข้อความ ส่วนที่เกินถูกละเว้น',
     aiUnknownError: 'ข้อผิดพลาดที่ไม่รู้จัก',
+    aiTimeoutError:
+      'คำขอ AI หมดเวลา: เครือข่ายไม่ตอบสนอง จึงหยุดการทำงาน โปรดตรวจสอบการเชื่อมต่อแล้วลองใหม่',
+    aiCreditsExhausted:
+      'เครดิต Genspark ของคุณหมดแล้ว โปรดเติมเครดิตที่ genspark.ai/pricing แล้วลองใหม่',
     aiSumReadAttachment: 'อ่านสิ่งที่แนบ',
     aiSumImageAttachment: 'รูปภาพแนบ {name}',
     aiSumRead: 'อ่าน {name}',
@@ -809,6 +886,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Ringkas isi utama dan poin-poin penting dokumen ini',
     aiPolishBtn: 'Poles AI',
     aiPolishPrompt: 'Poles seluruh dokumen agar tulisan lebih jelas dan mengalir',
+    aiTidyBtn: 'Format AI',
+    aiTidyPrompt:
+      'Rapikan format seluruh dokumen, misalnya perbaiki level judul, seragamkan format daftar, hapus cetak tebal/miring yang tidak perlu, dan samakan indentasi paragraf. Ubah format saja, jangan mengubah teks apa pun',
     aiSwitchModelTitle: 'Ganti model AI',
     aiNewChatTitle: 'Obrolan baru',
     aiCollapseTitle: 'Ciutkan panel',
@@ -850,9 +930,15 @@ export const aiStrings = defineStrings({
       '(Batas putaran pemanggilan alat untuk permintaan ini tercapai; jawaban di atas berdasarkan langkah yang telah selesai dan mungkin tidak lengkap.)',
     aiStopped: '(Dihentikan)',
     aiNoReply: 'AI tidak mengembalikan konten.',
+    aiTruncatedNote: '(Balasan terpotong karena batas panjang dan mungkin tidak lengkap.)',
+    aiImagesSendFailed: 'Lampiran gambar tidak dapat dibaca; pesan ini dikirim tanpa gambar',
     aiImageReadFail: '{name}: gagal dibaca',
     aiTooManyImages: 'Maksimal {max} gambar per pesan; kelebihannya diabaikan',
     aiUnknownError: 'Kesalahan tidak dikenal',
+    aiTimeoutError:
+      'Permintaan AI habis waktu: jaringan tidak merespons sehingga proses dihentikan. Periksa koneksi Anda lalu coba lagi',
+    aiCreditsExhausted:
+      'Kredit Genspark Anda telah habis. Isi ulang di genspark.ai/pricing lalu coba lagi',
     aiSumReadAttachment: 'Baca lampiran',
     aiSumImageAttachment: 'Lampiran gambar {name}',
     aiSumRead: 'Baca {name}',
@@ -908,6 +994,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Кратко изложите основное содержание и ключевые моменты этого документа',
     aiPolishBtn: 'ИИ-редактура',
     aiPolishPrompt: 'Отредактируйте весь документ, чтобы текст стал яснее и плавнее',
+    aiTidyBtn: 'ИИ-форматирование',
+    aiTidyPrompt:
+      'Приведите в порядок форматирование всего документа — например, исправьте уровни заголовков, унифицируйте списки, уберите лишнее выделение жирным и курсивом, выровняйте отступы абзацев. Меняйте только форматирование, не изменяя текст',
     aiSwitchModelTitle: 'Сменить модель ИИ',
     aiNewChatTitle: 'Новый чат',
     aiCollapseTitle: 'Свернуть панель',
@@ -949,9 +1038,16 @@ export const aiStrings = defineStrings({
       '(Достигнут лимит вызовов инструментов для этого запроса; ответ выше основан на уже выполненных шагах и может быть неполным.)',
     aiStopped: '(Остановлено)',
     aiNoReply: 'ИИ не вернул содержимое.',
+    aiTruncatedNote: '(Ответ был обрезан из-за ограничения длины и может быть неполным.)',
+    aiImagesSendFailed:
+      'Не удалось прочитать вложенные изображения; это сообщение отправлено без изображений',
     aiImageReadFail: '{name}: не удалось прочитать',
     aiTooManyImages: 'Не более {max} изображений на сообщение; лишние проигнорированы',
     aiUnknownError: 'Неизвестная ошибка',
+    aiTimeoutError:
+      'Тайм-аут запроса ИИ: сеть не отвечает, выполнение остановлено. Проверьте подключение и повторите попытку',
+    aiCreditsExhausted:
+      'Кредиты Genspark исчерпаны. Пополните баланс на genspark.ai/pricing и повторите попытку',
     aiSumReadAttachment: 'Чтение вложения',
     aiSumImageAttachment: 'Вложенное изображение {name}',
     aiSumRead: 'Чтение {name}',
@@ -1007,6 +1103,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'لخّص المحتوى الرئيسي والنقاط الأساسية لهذا المستند',
     aiPolishBtn: 'تحسين AI',
     aiPolishPrompt: 'حسّن المستند بأكمله لجعل الكتابة أوضح وأكثر سلاسة',
+    aiTidyBtn: 'تنسيق AI',
+    aiTidyPrompt:
+      'رتّب تنسيق المستند بأكمله، مثل تصحيح مستويات العناوين، وتوحيد تنسيق القوائم، وإزالة الخط الغامق والمائل غير الضروري، وتوحيد المسافات البادئة للفقرات وغيرها. عدّل التنسيق فقط دون تغيير أي نص',
     aiSwitchModelTitle: 'تبديل نموذج الذكاء الاصطناعي',
     aiNewChatTitle: 'محادثة جديدة',
     aiCollapseTitle: 'طي اللوحة',
@@ -1048,9 +1147,15 @@ export const aiStrings = defineStrings({
       '(تم بلوغ الحد الأقصى لجولات استدعاء الأدوات لهذا الطلب؛ الإجابة أعلاه تستند إلى الخطوات المكتملة وقد تكون غير كاملة.)',
     aiStopped: '(تم الإيقاف)',
     aiNoReply: 'لم يُرجع الذكاء الاصطناعي أي محتوى.',
+    aiTruncatedNote: '(تم اقتطاع الرد بسبب حد الطول وقد يكون غير مكتمل.)',
+    aiImagesSendFailed: 'تعذّرت قراءة الصور المرفقة؛ تم إرسال هذه الرسالة بدون صور',
     aiImageReadFail: '{name}: فشلت القراءة',
     aiTooManyImages: 'يمكن إرسال {max} صور كحد أقصى مع كل رسالة؛ تم تجاهل الزائد',
     aiUnknownError: 'خطأ غير معروف',
+    aiTimeoutError:
+      'انتهت مهلة طلب الذكاء الاصطناعي: لا توجد استجابة من الشبكة وتم الإيقاف. تحقق من الاتصال وحاول مجددًا',
+    aiCreditsExhausted:
+      'نفدت أرصدة Genspark لديك. يرجى إعادة الشحن عبر genspark.ai/pricing ثم المحاولة مجددًا',
     aiSumReadAttachment: 'قراءة المرفق',
     aiSumImageAttachment: 'مرفق صورة {name}',
     aiSumRead: 'قراءة {name}',
@@ -1106,6 +1211,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Resuma o conteúdo principal e os pontos-chave deste documento',
     aiPolishBtn: 'Aprimorar IA',
     aiPolishPrompt: 'Aprimore todo o documento para deixar o texto mais claro e fluente',
+    aiTidyBtn: 'Formatação IA',
+    aiTidyPrompt:
+      'Organize a formatação de todo o documento — por exemplo, corrija os níveis de título, uniformize as listas, remova negritos e itálicos desnecessários e padronize o recuo dos parágrafos. Ajuste apenas a formatação, sem alterar o texto',
     aiSwitchModelTitle: 'Trocar modelo de IA',
     aiNewChatTitle: 'Nova conversa',
     aiCollapseTitle: 'Recolher painel',
@@ -1147,9 +1255,16 @@ export const aiStrings = defineStrings({
       '(Limite de chamadas de ferramentas desta solicitação atingido; a resposta acima reflete as etapas concluídas até agora e pode estar incompleta.)',
     aiStopped: '(Interrompido)',
     aiNoReply: 'A IA não retornou conteúdo.',
+    aiTruncatedNote: '(A resposta foi cortada pelo limite de comprimento e pode estar incompleta.)',
+    aiImagesSendFailed:
+      'Não foi possível ler as imagens anexadas; esta mensagem foi enviada sem imagens',
     aiImageReadFail: '{name}: falha na leitura',
     aiTooManyImages: 'No máximo {max} imagens por mensagem; as excedentes foram ignoradas',
     aiUnknownError: 'Erro desconhecido',
+    aiTimeoutError:
+      'A solicitação de IA expirou: sem resposta da rede, a execução foi interrompida. Verifique sua conexão e tente novamente',
+    aiCreditsExhausted:
+      'Seus créditos Genspark acabaram. Recarregue em genspark.ai/pricing e tente novamente',
     aiSumReadAttachment: 'Ler anexo',
     aiSumImageAttachment: 'Imagem anexada {name}',
     aiSumRead: 'Ler {name}',
@@ -1206,6 +1321,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Riassumi il contenuto principale e i punti chiave di questo documento',
     aiPolishBtn: 'Rifinitura IA',
     aiPolishPrompt: 'Rifinisci tutto il documento per rendere il testo più chiaro e scorrevole',
+    aiTidyBtn: 'Formattazione IA',
+    aiTidyPrompt:
+      'Sistema la formattazione di tutto il documento — ad esempio correggi i livelli dei titoli, uniforma gli elenchi, rimuovi grassetti e corsivi superflui e uniforma i rientri dei paragrafi. Modifica solo la formattazione, senza cambiare il testo',
     aiSwitchModelTitle: 'Cambia modello IA',
     aiNewChatTitle: 'Nuova conversazione',
     aiCollapseTitle: 'Comprimi pannello',
@@ -1248,10 +1366,18 @@ export const aiStrings = defineStrings({
       '(Raggiunto il limite di chiamate agli strumenti per questa richiesta; la risposta sopra riflette i passaggi completati finora e potrebbe essere incompleta.)',
     aiStopped: '(Interrotto)',
     aiNoReply: "L'IA non ha restituito alcun contenuto.",
+    aiTruncatedNote:
+      '(La risposta è stata troncata dal limite di lunghezza e potrebbe essere incompleta.)',
+    aiImagesSendFailed:
+      'Impossibile leggere le immagini allegate; questo messaggio è stato inviato senza immagini',
     aiImageReadFail: '{name}: lettura non riuscita',
     aiTooManyImages:
       'Al massimo {max} immagini per messaggio; quelle in eccesso sono state ignorate',
     aiUnknownError: 'Errore sconosciuto',
+    aiTimeoutError:
+      'Richiesta IA scaduta: nessuna risposta dalla rete, esecuzione interrotta. Controlla la connessione e riprova',
+    aiCreditsExhausted:
+      'I tuoi crediti Genspark sono esauriti. Ricarica su genspark.ai/pricing e riprova',
     aiSumReadAttachment: 'Lettura allegato',
     aiSumImageAttachment: 'Immagine allegata {name}',
     aiSumRead: 'Lettura di {name}',
@@ -1307,6 +1433,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Podsumuj główną treść i kluczowe punkty tego dokumentu',
     aiPolishBtn: 'Szlif AI',
     aiPolishPrompt: 'Dopracuj cały dokument, aby tekst był jaśniejszy i płynniejszy',
+    aiTidyBtn: 'Formatowanie AI',
+    aiTidyPrompt:
+      'Uporządkuj formatowanie całego dokumentu — na przykład popraw poziomy nagłówków, ujednolić listy, usuń zbędne pogrubienia i kursywę, wyrównaj wcięcia akapitów. Zmieniaj tylko formatowanie, nie zmieniając tekstu',
     aiSwitchModelTitle: 'Przełącz model AI',
     aiNewChatTitle: 'Nowa rozmowa',
     aiCollapseTitle: 'Zwiń panel',
@@ -1348,9 +1477,16 @@ export const aiStrings = defineStrings({
       '(Osiągnięto limit rund wywołań narzędzi dla tego żądania; powyższa odpowiedź opiera się na dotychczas ukończonych krokach i może być niepełna.)',
     aiStopped: '(Zatrzymano)',
     aiNoReply: 'AI nie zwróciła żadnej treści.',
+    aiTruncatedNote: '(Odpowiedź została ucięta przez limit długości i może być niepełna.)',
+    aiImagesSendFailed:
+      'Nie udało się odczytać załączonych obrazów; ta wiadomość została wysłana bez obrazów',
     aiImageReadFail: '{name}: odczyt nie powiódł się',
     aiTooManyImages: 'Maksymalnie {max} obrazów na wiadomość; nadmiarowe zostały zignorowane',
     aiUnknownError: 'Nieznany błąd',
+    aiTimeoutError:
+      'Przekroczono limit czasu żądania AI: brak odpowiedzi sieci, przerwano. Sprawdź połączenie i spróbuj ponownie',
+    aiCreditsExhausted:
+      'Twoje kredyty Genspark wyczerpały się. Doładuj konto na genspark.ai/pricing i spróbuj ponownie',
     aiSumReadAttachment: 'Odczyt załącznika',
     aiSumImageAttachment: 'Załącznik graficzny {name}',
     aiSumRead: 'Odczyt {name}',
@@ -1406,6 +1542,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Vat de hoofdinhoud en kernpunten van dit document samen',
     aiPolishBtn: 'AI-polijsten',
     aiPolishPrompt: 'Polijst het hele document zodat de tekst duidelijker en vloeiender wordt',
+    aiTidyBtn: 'AI-opmaak',
+    aiTidyPrompt:
+      'Ruim de opmaak van het hele document op — bijvoorbeeld kopniveaus corrigeren, lijsten uniform maken, overbodige vet- en cursiefopmaak verwijderen en alinea-inspringingen consistent maken. Pas alleen de opmaak aan, verander de tekst niet',
     aiSwitchModelTitle: 'AI-model wisselen',
     aiNewChatTitle: 'Nieuw gesprek',
     aiCollapseTitle: 'Paneel samenvouwen',
@@ -1447,9 +1586,16 @@ export const aiStrings = defineStrings({
       '(Limiet voor toolaanroepen voor dit verzoek bereikt; het antwoord hierboven is gebaseerd op de tot nu toe voltooide stappen en is mogelijk onvolledig.)',
     aiStopped: '(Gestopt)',
     aiNoReply: 'De AI heeft geen inhoud teruggegeven.',
+    aiTruncatedNote: '(Het antwoord is afgekapt door de lengtelimiet en is mogelijk onvolledig.)',
+    aiImagesSendFailed:
+      'Afbeeldingsbijlagen konden niet worden gelezen; dit bericht is zonder afbeeldingen verzonden',
     aiImageReadFail: '{name}: lezen mislukt',
     aiTooManyImages: 'Maximaal {max} afbeeldingen per bericht; extra afbeeldingen zijn genegeerd',
     aiUnknownError: 'Onbekende fout',
+    aiTimeoutError:
+      'AI-verzoek verlopen: geen reactie van het netwerk, uitvoering gestopt. Controleer je verbinding en probeer het opnieuw',
+    aiCreditsExhausted:
+      'Je Genspark-credits zijn op. Waardeer op via genspark.ai/pricing en probeer het opnieuw',
     aiSumReadAttachment: 'Bijlage lezen',
     aiSumImageAttachment: 'Afbeeldingsbijlage {name}',
     aiSumRead: '{name} lezen',
@@ -1505,6 +1651,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'Ringkaskan kandungan utama dan perkara penting dokumen ini',
     aiPolishBtn: 'Gilap AI',
     aiPolishPrompt: 'Gilap keseluruhan dokumen supaya penulisan lebih jelas dan lancar',
+    aiTidyBtn: 'Format AI',
+    aiTidyPrompt:
+      'Kemaskan format keseluruhan dokumen, contohnya betulkan tahap tajuk, seragamkan format senarai, buang huruf tebal/condong yang tidak perlu, dan selaraskan inden perenggan. Laraskan format sahaja, jangan ubah sebarang teks',
     aiSwitchModelTitle: 'Tukar model AI',
     aiNewChatTitle: 'Perbualan baharu',
     aiCollapseTitle: 'Runtuhkan panel',
@@ -1546,9 +1695,15 @@ export const aiStrings = defineStrings({
       '(Had pusingan panggilan alat untuk permintaan ini telah dicapai; jawapan di atas berdasarkan langkah yang telah selesai dan mungkin tidak lengkap.)',
     aiStopped: '(Dihentikan)',
     aiNoReply: 'AI tidak memulangkan sebarang kandungan.',
+    aiTruncatedNote: '(Balasan terpotong kerana had panjang dan mungkin tidak lengkap.)',
+    aiImagesSendFailed: 'Lampiran imej tidak dapat dibaca; mesej ini dihantar tanpa imej',
     aiImageReadFail: '{name}: gagal dibaca',
     aiTooManyImages: 'Maksimum {max} imej setiap mesej; yang lebihan diabaikan',
     aiUnknownError: 'Ralat tidak diketahui',
+    aiTimeoutError:
+      'Permintaan AI tamat masa: rangkaian tidak memberi respons, proses dihentikan. Semak sambungan anda dan cuba lagi',
+    aiCreditsExhausted:
+      'Kredit Genspark anda telah habis. Tambah nilai di genspark.ai/pricing dan cuba lagi',
     aiSumReadAttachment: 'Baca lampiran',
     aiSumImageAttachment: 'Lampiran imej {name}',
     aiSumRead: 'Baca {name}',
@@ -1604,6 +1759,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'סכם את התוכן העיקרי ואת הנקודות המרכזיות של מסמך זה',
     aiPolishBtn: 'ליטוש AI',
     aiPolishPrompt: 'לטש את המסמך כולו כדי שהכתיבה תהיה ברורה וזורמת יותר',
+    aiTidyBtn: 'עיצוב AI',
+    aiTidyPrompt:
+      'סדר את העיצוב של המסמך כולו — למשל תקן רמות כותרות, אחד את עיצוב הרשימות, הסר הדגשות והטיות מיותרות ויישר את הזחות הפסקאות. שנה רק את העיצוב, בלי לשנות את הטקסט',
     aiSwitchModelTitle: 'החלפת מודל AI',
     aiNewChatTitle: 'שיחה חדשה',
     aiCollapseTitle: 'כיווץ החלונית',
@@ -1645,9 +1803,13 @@ export const aiStrings = defineStrings({
       '(הגעתם למגבלת סבבי קריאות הכלים לבקשה זו; התשובה שלמעלה מבוססת על השלבים שהושלמו עד כה ועשויה להיות חלקית.)',
     aiStopped: '(נעצר)',
     aiNoReply: 'ה-AI לא החזיר תוכן.',
+    aiTruncatedNote: '(התשובה נחתכה בגלל מגבלת האורך וייתכן שאינה שלמה.)',
+    aiImagesSendFailed: 'לא ניתן היה לקרוא את התמונות המצורפות; הודעה זו נשלחה ללא תמונות',
     aiImageReadFail: '{name}: הקריאה נכשלה',
     aiTooManyImages: 'עד {max} תמונות בהודעה; הנוספות לא נכללו',
     aiUnknownError: 'שגיאה לא ידועה',
+    aiTimeoutError: 'תם הזמן לבקשת ה-AI: אין תגובה מהרשת וההרצה הופסקה. בדוק את החיבור ונסה שוב',
+    aiCreditsExhausted: 'קרדיטי Genspark שלך אזלו. טען מחדש ב-genspark.ai/pricing ונסה שוב',
     aiSumReadAttachment: 'קריאת קובץ מצורף',
     aiSumImageAttachment: 'תמונה מצורפת {name}',
     aiSumRead: 'קריאת {name}',
@@ -1703,6 +1865,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: 'इस दस्तावेज़ की मुख्य सामग्री और प्रमुख बिंदुओं का सारांश दें',
     aiPolishBtn: 'AI परिष्करण',
     aiPolishPrompt: 'पूरे दस्तावेज़ को परिष्कृत करें ताकि लेखन अधिक स्पष्ट और प्रवाहपूर्ण हो',
+    aiTidyBtn: 'AI स्वरूपण',
+    aiTidyPrompt:
+      'पूरे दस्तावेज़ का स्वरूपण व्यवस्थित करें — उदाहरण के लिए शीर्षक स्तर ठीक करें, सूचियों का प्रारूप एकरूप करें, अनावश्यक बोल्ड/इटैलिक हटाएँ और अनुच्छेदों का इंडेंट एकसमान करें। केवल स्वरूपण बदलें, पाठ में कोई बदलाव न करें',
     aiSwitchModelTitle: 'AI मॉडल बदलें',
     aiNewChatTitle: 'नई बातचीत',
     aiCollapseTitle: 'पैनल संक्षिप्त करें',
@@ -1744,9 +1909,15 @@ export const aiStrings = defineStrings({
       '(इस अनुरोध के लिए टूल कॉल की सीमा पूरी हो गई; ऊपर का उत्तर अब तक पूर्ण हुए चरणों पर आधारित है और अधूरा हो सकता है।)',
     aiStopped: '(रोका गया)',
     aiNoReply: 'AI ने कोई सामग्री नहीं लौटाई।',
+    aiTruncatedNote: '(उत्तर लंबाई सीमा के कारण कट गया और अधूरा हो सकता है।)',
+    aiImagesSendFailed: 'छवि अनुलग्नक पढ़े नहीं जा सके; यह संदेश बिना छवियों के भेजा गया',
     aiImageReadFail: '{name}: पढ़ने में विफल',
     aiTooManyImages: 'प्रति संदेश अधिकतम {max} चित्र; अतिरिक्त को अनदेखा कर दिया गया',
     aiUnknownError: 'अज्ञात त्रुटि',
+    aiTimeoutError:
+      'AI अनुरोध का समय समाप्त: नेटवर्क से कोई प्रतिक्रिया नहीं मिली, इसलिए रोक दिया गया। कनेक्शन जांचें और फिर से प्रयास करें',
+    aiCreditsExhausted:
+      'आपके Genspark क्रेडिट समाप्त हो गए हैं। genspark.ai/pricing पर रिचार्ज करें और फिर से प्रयास करें',
     aiSumReadAttachment: 'अनुलग्नक पढ़ें',
     aiSumImageAttachment: 'चित्र अनुलग्नक {name}',
     aiSumRead: '{name} पढ़ें',
@@ -1802,6 +1973,9 @@ export const aiStrings = defineStrings({
     aiSummarizePrompt: '總結這篇文件的主要內容和要點',
     aiPolishBtn: 'AI 潤飾',
     aiPolishPrompt: '潤飾全文,使表達更清晰流暢',
+    aiTidyBtn: 'AI 排版',
+    aiTidyPrompt:
+      '整理全文排版,例如修正標題層級、統一列表格式、移除多餘的粗體和斜體、為內文補齊首行縮排等;只調整格式,不要改動任何文字內容',
     aiSwitchModelTitle: '切換 AI 模型',
     aiNewChatTitle: '新對話',
     aiCollapseTitle: '收合面板',
@@ -1841,9 +2015,13 @@ export const aiStrings = defineStrings({
     aiTurnLimit: '（已達單次要求的工具呼叫輪數上限，以上是基於已完成步驟的回答，可能不完整。）',
     aiStopped: '(已停止)',
     aiNoReply: 'AI 沒有回傳內容。',
+    aiTruncatedNote: '（回覆因長度限制被截斷,內容可能不完整。）',
+    aiImagesSendFailed: '圖片附件讀取失敗,本則訊息已改為不含圖片傳送',
     aiImageReadFail: '{name}: 讀取失敗',
     aiTooManyImages: '圖片最多隨訊息傳送 {max} 張,多餘的已忽略',
     aiUnknownError: '未知錯誤',
+    aiTimeoutError: 'AI 請求逾時：網路長時間無回應，已停止。請檢查網路後重試',
+    aiCreditsExhausted: 'Genspark 點數已用完，請前往 genspark.ai/pricing 儲值後重試',
     aiSumReadAttachment: '讀取附件',
     aiSumImageAttachment: '圖片附件 {name}',
     aiSumRead: '讀取 {name}',

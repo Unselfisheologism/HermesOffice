@@ -1,5 +1,5 @@
 /**
- * Wrapper around the upstream gsk CLI — search / image generation /
+ * Wrapper around gsk (Genspark CLI, @genspark/cli) — search / image generation /
  * media analysis / upload / transcription.
  *
  * Execution: the main process spawns the CLI's JS entry with
@@ -7,10 +7,8 @@
  * no-op in a plain Node environment), avoiding the Windows problem where
  * .cmd files cannot be passed to execFile.
  *
- * Auth: the api_key field in ~/.genspark-tool-cli/config.json written by
- * `gsk login`, or the GSK_API_KEY environment variable. When not logged in,
- * hasGskAuth() returns false and callers should fall back to other
- * implementations (e.g. Serper/DuckDuckGo search).
+ * Auth: gskApiKey() below. When not logged in, hasGskAuth() returns false and
+ * callers should fall back to other implementations (e.g. Serper search).
  */
 
 import { execFile } from 'node:child_process'
@@ -22,10 +20,12 @@ import {
   COPYRIGHT_HOSTS,
   asRecord,
   firstItem,
+  gskProxyUrl,
   safeHost,
   type ImageSearchResult,
   type WebSearchResult,
 } from './shared'
+import { hermesofficeApiKey } from './hermesoffice-auth'
 
 const SEARCH_TIMEOUT_MS = 60_000
 const GENERATE_TIMEOUT_MS = 600_000
@@ -78,9 +78,15 @@ function electronCompatArgs(): string[] {
   return compatPath ? ['--require', compatPath] : []
 }
 
-/** API key written by gsk login (or GSK_API_KEY env var); '' when not logged in. Also used for the upstream LLM proxy auth. */
+/**
+ * API key for Genspark LLM proxy / tool_cli auth; '' when not logged in.
+ * Priority: GSK_API_KEY env → HermesOffice's own key (bills to us via its
+ * key_name) → shared gsk CLI login (bills to the Claw bucket).
+ */
 export function gskApiKey(): string {
   if (process.env.GSK_API_KEY) return process.env.GSK_API_KEY
+  const own = hermesofficeApiKey()
+  if (own) return own
   try {
     const configPath = join(homedir(), '.genspark-tool-cli', 'config.json')
     if (!existsSync(configPath)) return ''
@@ -98,6 +104,43 @@ export function gskApiKey(): string {
 export function hasGskAuth(): boolean {
   if (process.env.AI_SEARCH_DISABLE_GSK === '1') return false
   return !!gskApiKey() && resolveGskEntry() !== null
+}
+
+// ── Child-process proxy plumbing ────────────────────────────────────
+
+// The main process's undici dispatcher (see the apps' proxy bootstraps) never
+// reaches child processes: without forwarding they dial genspark.ai directly.
+export { setGskProxyUrl, gskProxyUrl } from './shared'
+
+/**
+ * env for gsk CLI children: Electron-as-Node plus proxy forwarding. The CLI
+ * uses Node's built-in fetch, which ignores proxy env vars unless
+ * NODE_USE_ENV_PROXY=1 (Node >= 24 — Electron 41 ships Node 24). Only
+ * http(s):// proxies are forwarded; undici's env proxy cannot speak SOCKS.
+ */
+export function gskChildEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ELECTRON_RUN_AS_NODE: '1' }
+  const proxy = [
+    gskProxyUrl(),
+    base.HTTPS_PROXY,
+    base.https_proxy,
+    base.HTTP_PROXY,
+    base.http_proxy,
+    base.ALL_PROXY,
+    base.all_proxy,
+  ].find((v) => v && /^https?:\/\//.test(v))
+  if (proxy) {
+    // scrub inherited variants: undici's env proxy prefers the lowercase
+    // names, so a leftover https_proxy/all_proxy would override the selection
+    delete env.https_proxy
+    delete env.http_proxy
+    delete env.ALL_PROXY
+    delete env.all_proxy
+    env.NODE_USE_ENV_PROXY = '1'
+    env.HTTPS_PROXY = proxy
+    env.HTTP_PROXY = proxy
+  }
+  return env
 }
 
 // ── Low-level execution ─────────────────────────────────────────────
@@ -130,6 +173,8 @@ export function parseGskOutput(stdout: string): unknown {
 function runGsk(args: string[], timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
   const entry = resolveGskEntry()
   if (!entry) return Promise.reject(new Error('@genspark/cli is not installed'))
+  // inject the resolved key so the CLI bills the same identity as our direct HTTP calls
+  const key = gskApiKey()
   return new Promise((resolve, reject) => {
     execFile(
       process.execPath,
@@ -137,7 +182,10 @@ function runGsk(args: string[], timeoutMs: number, signal?: AbortSignal): Promis
       {
         timeout: timeoutMs,
         maxBuffer: MAX_BUFFER,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        env: {
+          ...gskChildEnv(),
+          ...(key ? { GSK_API_KEY: key } : {}),
+        },
         ...(signal ? { signal } : {}),
       },
       (err, stdout, stderr) => {
@@ -288,7 +336,7 @@ export async function gskResolveDownloadUrl(url: string): Promise<string> {
   }
 }
 
-// ── Cloud single-slide generation (upstream slide_generate) ─────────
+// ── Cloud single-slide generation (Genspark slide_generate) ─────────
 
 /**
  * Calls the tool_cli HTTP endpoint directly so structured params
@@ -338,7 +386,7 @@ async function toolCliPost(
   signal?: AbortSignal,
 ): Promise<unknown> {
   const key = gskApiKey()
-  if (!key) throw new Error('Upstream search unavailable (no legacy login)')
+  if (!key) throw new Error('Not logged in to Genspark (gsk login)')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const onAbort = () => controller.abort()
@@ -346,7 +394,12 @@ async function toolCliPost(
   try {
     const resp = await fetch(`${GSK_TOOL_CLI_BASE}${path}`, {
       method: 'POST',
-      headers: { 'X-Api-Key': key, 'Content-Type': 'application/json' },
+      // X-Agent-Type splits HermesOffice usage out of the proxy's "Claw" billing bucket
+      headers: {
+        'X-Api-Key': key,
+        'Content-Type': 'application/json',
+        'X-Agent-Type': 'hermesoffice',
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     })
@@ -394,6 +447,36 @@ export async function gskSlideGenerate(
   const resp = await fetch(String(downloadUrl), signal ? { signal } : undefined)
   if (!resp.ok) throw new Error(`PPTX download failed: HTTP ${resp.status}`)
   return { bytes: new Uint8Array(await resp.arrayBuffer()), model: String(data.model ?? '') }
+}
+
+// ── File conversion (PDF → DOCX) ────────────────────────────────────
+
+/** Extracts the download link from file_convert's markdown result text (exported for tests) */
+export function parseGskConvertResult(raw: unknown): string {
+  const data = asRecord(asRecord(raw).data ?? raw)
+  const text = typeof data.result === 'string' ? data.result : ''
+  const url = /\((https?:\/\/[^)\s]+)\)/.exec(text)?.[1] ?? /https?:\/\/\S+/.exec(text)?.[0]
+  if (!url) {
+    throw new Error(`file_convert returned no link: ${JSON.stringify(raw).slice(0, 200)}`)
+  }
+  return url
+}
+
+/**
+ * Uploads a local PDF and converts it to DOCX in the cloud (`gsk convert`,
+ * costs 5 credits); returns the DOCX bytes.
+ */
+export async function gskConvertPdfToDocx(
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const wrapperUrl = await gskUpload(filePath)
+  const raw = await runGsk(['convert', wrapperUrl], GENERATE_TIMEOUT_MS, signal)
+  const link = parseGskConvertResult(raw)
+  const downloadUrl = await gskResolveDownloadUrl(link)
+  const resp = await fetch(downloadUrl, signal ? { signal } : undefined)
+  if (!resp.ok) throw new Error(`DOCX download failed: HTTP ${resp.status}`)
+  return new Uint8Array(await resp.arrayBuffer())
 }
 
 // ── Media analysis / transcription ──────────────────────────────────
@@ -472,9 +555,90 @@ export async function gskUpload(filePath: string): Promise<string> {
   return String(url)
 }
 
+// ── Past projects (Genspark web) ────────────────────────────────────
+
+export interface GskPastProject {
+  projectId: string
+  /** raw project type, e.g. 'slides_agent_git' */
+  type: string
+  title: string
+  /** creation time, ISO-like string from the API */
+  ctime: string
+  /** relative web URL, e.g. '/agents?id=...' — join with https://www.genspark.ai */
+  projectUrl: string
+}
+
+export interface GskPastProjectsPage {
+  projects: GskPastProject[]
+  total: number
+  hasMore: boolean
+}
+
+/**
+ * Parses `gsk projects`. data.projects lacks project_url — it only appears in
+ * session_state.past_projects — so take it from there, falling back to
+ * deriving it from the project id. (exported for tests)
+ */
+export function parseGskPastProjects(raw: unknown): GskPastProjectsPage {
+  const rec = asRecord(raw)
+  const data = asRecord(rec.data ?? raw)
+  const urlById = new Map<string, string>()
+  const sessionProjects = asRecord(asRecord(rec.session_state).past_projects).projects
+  if (Array.isArray(sessionProjects)) {
+    for (const item of sessionProjects) {
+      const p = asRecord(item)
+      if (p.project_id && typeof p.project_url === 'string' && p.project_url) {
+        urlById.set(String(p.project_id), p.project_url)
+      }
+    }
+  }
+  const listRaw: unknown[] = Array.isArray(data.projects) ? data.projects : []
+  const projects: GskPastProject[] = []
+  for (const item of listRaw) {
+    const p = asRecord(item)
+    const projectId = String(p.project_id ?? '')
+    if (!projectId) continue
+    projects.push({
+      projectId,
+      type: String(p.type ?? ''),
+      title: String(p.title ?? ''),
+      ctime: String(p.ctime ?? ''),
+      projectUrl: urlById.get(projectId) ?? `/agents?id=${projectId}`,
+    })
+  }
+  const total = Number(data.total)
+  return {
+    projects,
+    total: Number.isFinite(total) ? total : projects.length,
+    hasMore: data.has_more === true,
+  }
+}
+
+export interface GskListPastProjectsOptions {
+  /** 'slides' | 'docs' | 'sheets' | ...; omit for all kinds */
+  artifactTypes?: string[]
+  /** page size, CLI default 20, max 100 */
+  limit?: number
+  offset?: number
+  signal?: AbortSignal
+}
+
+/** Lists the user's own past Genspark web projects, newest first (`gsk projects`). */
+export async function gskListPastProjects(
+  options: GskListPastProjectsOptions = {},
+): Promise<GskPastProjectsPage> {
+  const args = ['projects']
+  if (options.artifactTypes?.length) args.push('--artifact_types', ...options.artifactTypes)
+  if (options.limit !== undefined) args.push('--limit', String(options.limit))
+  if (options.offset) args.push('--offset', String(options.offset))
+  const raw = await runGsk(args, SEARCH_TIMEOUT_MS, options.signal)
+  return parseGskPastProjects(raw)
+}
+
 export interface GskLoginInfo {
   email: string
   plan: string
+  creditBalance?: number
 }
 
 /** Current login info; null when not logged in */
@@ -483,35 +647,14 @@ export async function gskLoginInfo(): Promise<GskLoginInfo | null> {
     const raw = await runGsk(['login-info'], SEARCH_TIMEOUT_MS)
     const d = asRecord(asRecord(raw).data ?? raw)
     if (!d.email) return null
-    return { email: String(d.email), plan: String(d.plan ?? d.personal_plan ?? '') }
+    const info: GskLoginInfo = {
+      email: String(d.email),
+      plan: String(d.plan ?? d.personal_plan ?? ''),
+    }
+    const balance = Number(d.credit_balance)
+    if (Number.isFinite(balance)) info.creditBalance = balance
+    return info
   } catch {
     return null
   }
-}
-
-/** Triggers browser login (fire-and-forget; api_key is written to config.json on completion). Returns whether the CLI was launched. */
-export function gskLogin(): boolean {
-  const entry = resolveGskEntry()
-  if (!entry) return false
-  execFile(
-    process.execPath,
-    [...electronCompatArgs(), entry, 'login'],
-    { timeout: 300_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
-    () => {},
-  )
-  return true
-}
-
-/** Logs out (deletes the saved API key; note login state is shared globally with the terminal gsk CLI) */
-export function gskLogout(): Promise<void> {
-  const entry = resolveGskEntry()
-  if (!entry) return Promise.resolve()
-  return new Promise((resolve) => {
-    execFile(
-      process.execPath,
-      [...electronCompatArgs(), entry, 'logout'],
-      { timeout: 60_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
-      () => resolve(),
-    )
-  })
 }
