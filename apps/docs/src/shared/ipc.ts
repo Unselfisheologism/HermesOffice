@@ -23,7 +23,6 @@ import type {
   AiStreamChunk,
   AiStreamRequest,
   GatewayAccountStatus,
-  GenSparkAccountStatus,
 } from '@hermesoffice/ai-provider'
 
 export type {
