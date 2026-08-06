@@ -3,7 +3,7 @@ import { SHAPE_GALLERY_GROUPS, ShapePreview } from '@hermesoffice/ui'
 
 import {
   CaretIcon,
-  GensparkMark,
+  HermesMark,
   RIBBON_GLYPH_ICONS,
   RedoIcon,
   SaveIcon,
@@ -2053,10 +2053,10 @@ function Ribbon({
           onClick={onAiToggle}
         >
           <span className="tool-icon-row">
-            <GensparkMark size={26} />
+            <HermesMark size={26} />
           </span>
           <span>
-            <strong>Genspark AI</strong>
+            <strong>Hermes AI</strong>
           </span>
         </button>
         <button
