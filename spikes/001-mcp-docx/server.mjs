@@ -27,14 +27,10 @@ import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import {
-  parseDocx,
-  saveDocx,
-} from '@hermesoffice/docx-engine'
+import { parseDocx, saveDocx } from '@hermesoffice/docx-engine'
 
 const DOCX_PATH = process.env.DOCX_PATH
-const AUDIT_DIR =
-  process.env.AUDIT_DIR || join(homedir(), '.hermesoffice-spike39-audit')
+const AUDIT_DIR = process.env.AUDIT_DIR || join(homedir(), '.hermesoffice-spike39-audit')
 
 if (!DOCX_PATH) {
   console.error('DOCX_PATH env var required')
@@ -65,7 +61,11 @@ function auditRecord(op) {
         id: `${id}-op1`,
         type: op.type,
         summary: op.summary,
-        scope: { kind: 'range', ref: `${op.startBlockIndex}..${op.endBlockIndex}`, label: `blocks ${op.startBlockIndex}-${op.endBlockIndex}` },
+        scope: {
+          kind: 'range',
+          ref: `${op.startBlockIndex}..${op.endBlockIndex}`,
+          label: `blocks ${op.startBlockIndex}-${op.endBlockIndex}`,
+        },
         payload: op.payload,
       },
     ],
@@ -96,8 +96,7 @@ function blockText(b) {
 }
 
 function blockLine(b, i) {
-  const prefix =
-    b.type === 'heading' ? `h${b.level || 1}` : b.type
+  const prefix = b.type === 'heading' ? `h${b.level || 1}` : b.type
   const content = blockText(b).slice(0, 200).replace(/\n/g, '⏎')
   return `${i}\t${prefix}\t${content}`
 }
@@ -110,7 +109,10 @@ function readBlocks(startBlockIndex, endBlockIndex) {
       const s = Number(startBlockIndex) || 0
       const e = Number(endBlockIndex) ?? blocks.length - 1
       if (s < 0 || e < s || e >= blocks.length) {
-        return { isError: true, output: `block index out of range (doc has ${blocks.length} visible blocks)` }
+        return {
+          isError: true,
+          output: `block index out of range (doc has ${blocks.length} visible blocks)`,
+        }
       }
       const lines = blocks.slice(s, e + 1).map(blockLine)
       return { isError: false, output: `visible blocks: ${blocks.length}\n${lines.join('\n')}` }
@@ -159,7 +161,10 @@ async function replaceBlocks(startBlockIndex, endBlockIndex, html) {
   const s = Number(startBlockIndex)
   const e = Number(endBlockIndex)
   if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || e < s || e >= visible.length) {
-    return { isError: true, output: `block index out of range (doc has ${visible.length} visible blocks)` }
+    return {
+      isError: true,
+      output: `block index out of range (doc has ${visible.length} visible blocks)`,
+    }
   }
 
   // RFC 0008 gate: create the proposal record BEFORE mutating bytes
@@ -189,7 +194,8 @@ async function replaceBlocks(startBlockIndex, endBlockIndex, html) {
 const TOOLS = [
   {
     name: 'read_blocks',
-    description: 'Read the block tree of the .docx (index|type|content preview). Block indexes change after modifications; call again for fresh indexes.',
+    description:
+      'Read the block tree of the .docx (index|type|content preview). Block indexes change after modifications; call again for fresh indexes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -201,7 +207,8 @@ const TOOLS = [
   },
   {
     name: 'replace_blocks',
-    description: 'Replace a block range with new text. Runs through the Proposed Change pipeline (RFC 0008) with a stub auto-approve policy; the change is audited and the docx round-trip is byte-preserving.',
+    description:
+      'Replace a block range with new text. Runs through the Proposed Change pipeline (RFC 0008) with a stub auto-approve policy; the change is audited and the docx round-trip is byte-preserving.',
     inputSchema: {
       type: 'object',
       properties: {

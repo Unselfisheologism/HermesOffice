@@ -63,7 +63,9 @@ function textOf(result) {
 }
 
 async function main() {
-  const before = createHash('sha256').update(await readFile(docxPath)).digest('hex')
+  const before = createHash('sha256')
+    .update(await readFile(docxPath))
+    .digest('hex')
   console.log(`\n=== target: ${docxPath}`)
   console.log(`sha256 before: ${before}\n`)
 
@@ -72,7 +74,9 @@ async function main() {
     capabilities: {},
     clientInfo: { name: 'spike39-client', version: '0.0.1' },
   })
-  console.log(`[initialize] server: ${init.result?.serverInfo?.name} v${init.result?.serverInfo?.version}`)
+  console.log(
+    `[initialize] server: ${init.result?.serverInfo?.name} v${init.result?.serverInfo?.version}`,
+  )
 
   const tools = await call('tools/list')
   console.log(`[tools/list] ${tools.result?.tools?.map((t) => t.name).join(', ')}`)
@@ -86,7 +90,11 @@ async function main() {
   if (!skipReplace) {
     const rep = await call('tools/call', {
       name: 'replace_blocks',
-      arguments: { startBlockIndex: 0, endBlockIndex: 0, html: 'Spike 39 MCP edit: this paragraph was replaced by an external agent via MCP.' },
+      arguments: {
+        startBlockIndex: 0,
+        endBlockIndex: 0,
+        html: 'Spike 39 MCP edit: this paragraph was replaced by an external agent via MCP.',
+      },
     })
     console.log(`\n[replace_blocks 0..0]\n${textOf(rep.result)}`)
 
@@ -96,7 +104,9 @@ async function main() {
     })
     console.log(`\n[read_blocks 0..2 after replace]\n${textOf(read2.result)}`)
 
-    const after = createHash('sha256').update(await readFile(docxPath)).digest('hex')
+    const after = createHash('sha256')
+      .update(await readFile(docxPath))
+      .digest('hex')
     console.log(`\nsha256 after:  ${after}`)
     console.log(`changed: ${before !== after}`)
   }

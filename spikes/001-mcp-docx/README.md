@@ -25,6 +25,7 @@ renderer, no session, no ProseMirror.
   handshake
 
 Tools exposed:
+
 - `read_blocks(startBlockIndex, endBlockIndex)` — block tree of the docx
   (`index | type | content-preview`), hidden blocks filtered
 - `replace_blocks(startBlockIndex, endBlockIndex, html)` — replaces a range
@@ -97,6 +98,7 @@ hermes mcp test spike39
 ## Verdict: VALIDATED
 
 ### What worked
+
 - **Transport-only is real.** The engine (`parseDocx` → `Block[]` →
   `saveDocx`) is pure Node and request-scoped by nature. The spike exposed the
   two tools with **zero changes to the engine and zero ProseMirror** — the
@@ -111,6 +113,7 @@ hermes mcp test spike39
 - Real Hermes MCP client connects and discovers both tools.
 
 ### What didn't / constraints
+
 - **The tools are not 1:1 reusable as-is.** `read_blocks`/`replace_blocks` in
   the AI panel operate on the ProseMirror `Editor` (the renderer), not on the
   engine block tree. The spike re-implemented them against `docx-engine`
@@ -125,17 +128,19 @@ hermes mcp test spike39
   RFC (issue #38) is still design.
 - The local `hermes` CLI binary has an argparse regression (`-z`/positional
   prompt rejected) unrelated to the spike; E2E was proven via `hermes mcp
-  test` and the harness client instead.
+test` and the harness client instead.
 
 ### Surprises
+
 - `hermes mcp add` flag ordering: `--env`/`--connect-timeout` must come
   **before** `--args` (which consumes the rest of argv). Mistakenly placed
   after, they land in the server's `args` and the config is malformed.
 - The workspace packages export TS source directly (`"exports": {".":
-  "./src/index.ts"}`), so any external consumer must run through `tsx` (the
+"./src/index.ts"}`), so any external consumer must run through `tsx` (the
   repo's own tooling does this everywhere).
 
 ### Recommendation for the real build (Phase 2 keystone)
+
 1. **Build the headless tool twin as a real package** (e.g.
    `packages/docx-mcp` or a `tools/` module in the docs main process): engine-
    backed `read_blocks`/`replace_blocks` with the RFC 0008 proposal gate and
