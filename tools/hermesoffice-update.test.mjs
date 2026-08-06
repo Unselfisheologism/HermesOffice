@@ -139,6 +139,54 @@ test('prepare resolves npm outside the minimal PATH (fake sh reports it)', () =>
   }
 })
 
+test('prepare clones with a full working tree (no --no-checkout)', () => {
+  // Regression: the clone used --no-checkout, so the helper script itself
+  // (spawned from inside the checkout) did not exist and every first download
+  // died with a bogus "check your network" error. prepare must clone a real
+  // working tree.
+  const temp = mkdtempSync(join(tmpdir(), 'hermesoffice-update-test-'))
+  try {
+    const bin = join(temp, 'bin')
+    const src = join(temp, 'src')
+    const gitLog = join(temp, 'git-args.txt')
+    mkdirSync(bin, { recursive: true })
+    // fake git: log every invocation (clone must appear without --no-checkout)
+    // and create the destination dir so the later `npm ci` (cwd=SOURCE_DIR) runs
+    executable(
+      join(bin, 'git'),
+      `printf '%s\\n' "$*" >> "${gitLog}"; [ "$1" = "clone" ] && mkdir -p "$4"; exit 0`,
+    )
+    // npm resolution: fake sh reports the fake npm, which must succeed
+    executable(join(bin, 'sh'), `printf '%s\\n' "${bin}/npm"`)
+    executable(join(bin, 'npm'), 'exit 0')
+
+    const result = spawnSync(process.execPath, [HELPER, 'prepare'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:/usr/bin:/bin`,
+        HERMESOFFICE_SOURCE_DIR: src,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+
+    const cloneLine = readFileSync(gitLog, 'utf8')
+      .split('\n')
+      .find((line) => line.includes('clone'))
+    assert.ok(cloneLine, 'prepare must run a git clone: ' + readFileSync(gitLog, 'utf8'))
+    assert.ok(
+      !cloneLine.includes('--no-checkout'),
+      `clone must not use --no-checkout: ${cloneLine}`,
+    )
+    assert.ok(
+      cloneLine.includes('--filter=blob:none'),
+      `clone keeps blob:none filter: ${cloneLine}`,
+    )
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
+  }
+})
+
 test('install does not wait out the poll window on its own process (pgrep self-match)', () => {
   // Regression: the helper runs through the packaged HermesOffice binary
   // (ELECTRON_RUN_AS_NODE), so `pgrep -x HermesOffice` matches the helper
