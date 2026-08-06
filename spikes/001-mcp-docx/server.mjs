@@ -25,7 +25,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { parseDocx, saveDocx } from '@hermesoffice/docx-engine'
 
@@ -107,7 +107,10 @@ function readBlocks(startBlockIndex, endBlockIndex) {
       const { parsed } = await loadParsed()
       const blocks = parsed.blocks.filter((b) => !b.hidden)
       const s = Number(startBlockIndex) || 0
-      const e = Number(endBlockIndex) ?? blocks.length - 1
+      const e =
+        endBlockIndex === undefined || endBlockIndex === null
+          ? blocks.length - 1
+          : Number(endBlockIndex)
       if (s < 0 || e < s || e >= blocks.length) {
         return {
           isError: true,
