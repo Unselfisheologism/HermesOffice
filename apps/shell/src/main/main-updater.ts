@@ -81,6 +81,22 @@ function builtVersion(): string | null {
   }
 }
 
+/** "0.6.0-3-g714bc4f" → "0.6.0"; "0.6.0" → "0.6.0"; "714bc4f" → null */
+function releaseBase(v: string): string | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v)
+  return m ? `${m[1]}.${m[2]}.${m[3]}` : null
+}
+
+/** -1 | 0 | 1 — compare major.minor.patch strings */
+function cmpRelease(a: string, b: string): number {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1
+  }
+  return 0
+}
+
 /** head of origin/main via the git protocol — no API token, no rate limit */
 function fetchMainCommit(): Promise<string | null> {
   return new Promise((resolve) => {
@@ -105,8 +121,8 @@ function fetchMainCommit(): Promise<string | null> {
   })
 }
 
-/** newest ho-v* release tag on origin (SemVer label + its commit), or null */
-function fetchLatestForkTag(): Promise<{ label: string; commit: string } | null> {
+/** newest ho-v* release tag on origin (name + SemVer label + its commit), or null */
+function fetchLatestForkTag(): Promise<{ name: string; label: string; commit: string } | null> {
   return new Promise((resolve) => {
     const child = spawn('git', ['ls-remote', '--tags', REPO_URL], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -131,7 +147,7 @@ function fetchLatestForkTag(): Promise<{ label: string; commit: string } | null>
           (v[0] === best.v[0] && (v[1] > best.v[1] || (v[1] === best.v[1] && v[2] > best.v[2])))
         if (newer) best = { v, label: `${m[2]}.${m[3]}.${m[4]}`, commit: m[1] }
       }
-      resolve(best ? { label: best.label, commit: best.commit } : null)
+      resolve(best ? { name: `ho-v${best.label}`, label: best.label, commit: best.commit } : null)
     })
   })
 }
@@ -139,6 +155,7 @@ function fetchLatestForkTag(): Promise<{ label: string; commit: string } | null>
 function spawnHelper(
   args: string[],
   onProgress: (pct: number, stage: string | null) => void,
+  envOverrides: Record<string, string> = {},
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [helperScript(), ...args], {
@@ -154,6 +171,7 @@ function spawnHelper(
         // them the helper's `npm ci` dies with "command not found" and the UI
         // reports a bogus "check your network" error.
         PATH: [process.env.PATH, ...EXTRA_PATH_DIRS].filter(Boolean).join(':'),
+        ...envOverrides,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -215,29 +233,41 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
     log('could not reach origin/main — network offline?')
     return
   }
-  if (main === built) {
-    log('up to date (', builtVer, ')')
-    return
-  }
-  if (main === dismissedCommit) return
-  // Semantic version label for the target: the newest ho-v* release tag when
-  // main sits on it, otherwise the tag plus the ahead-commit (SemVer build
-  // metadata form, e.g. "0.5.0+abc1234"). When no tag exists at all, label the
-  // value explicitly as a build — a bare SHA is not a version, and presenting
-  // it as one is what produced the misleading "v0.4.0 → v93a7024" display.
+  // Release-train: a source update is offered only when a NEWER ho-v* tag
+  // exists than the installed build's release base, and it installs that
+  // tag's commit — deterministic, never rolling main. Without ho-v* tags yet,
+  // fall back to the legacy "main moved" check.
   const tag = await fetchLatestForkTag()
-  const newVersion = tag
-    ? tag.commit === main
-      ? tag.label
-      : `${tag.label}+${main.slice(0, 7)}`
-    : `build ${main.slice(0, 7)}`
-  log('update available:', builtVer, '→', newVersion)
+  let newVersion: string
+  let targetRef: string
+  let updateKey: string
+  if (tag) {
+    const base = releaseBase(builtVer)
+    const newer = base === null || cmpRelease(tag.label, base) > 0
+    if (!newer) {
+      log('up to date (', builtVer, ')')
+      return
+    }
+    newVersion = tag.label
+    targetRef = tag.name
+    updateKey = tag.commit
+  } else {
+    if (main === built) {
+      log('up to date (', builtVer, ')')
+      return
+    }
+    newVersion = `build ${main.slice(0, 7)}`
+    targetRef = 'main'
+    updateKey = main
+  }
+  if (updateKey === dismissedCommit) return
+  log('update available:', builtVer, '→', newVersion, `(target ${targetRef})`)
 
   // Attention in background: dock badge + bounce + system notification,
   // once per update SHA (the modal window alone goes unnoticed when the
   // shell is not frontmost).
-  if (main !== lastNotifiedCommit) {
-    lastNotifiedCommit = main
+  if (updateKey !== lastNotifiedCommit) {
+    lastNotifiedCommit = updateKey
     app.dock?.setBadge('1')
     app.dock?.bounce('informational')
     if (Notification.isSupported()) {
@@ -255,8 +285,10 @@ async function checkForUpdate(getWindow: () => BrowserWindow | null): Promise<vo
         pushUpdateState({ phase: 'downloading', percent: 0 })
         try {
           await ensureSource()
-          await spawnHelper(['prepare'], (pct) =>
-            pushUpdateState({ phase: 'downloading', percent: pct }),
+          await spawnHelper(
+            ['prepare'],
+            (pct) => pushUpdateState({ phase: 'downloading', percent: pct }),
+            { HERMESOFFICE_TARGET_REF: targetRef },
           )
           await spawnHelper(['build'], (pct) =>
             pushUpdateState({ phase: 'downloading', percent: pct }),

@@ -1185,7 +1185,7 @@ export function AiPanel({
           // Signed-out failures get an inline sign-in button; detected via
           // gsk status rather than matching the localized error text
           void window.slidesApi
-            .aiGskStatus()
+            .aiGatewayStatus()
             .then((status) => {
               if (status.loggedIn) return
               setChat((prev) => {
@@ -1678,8 +1678,11 @@ export function AiPanel({
                 <div className="ai-msg-error">{t('aiMsgError', { error: entry.error })}</div>
               )}
               {entry.loginRequired && (
-                <button className="ai-login-btn" onClick={() => void window.slidesApi.aiGskLogin()}>
-                  {t('aiGskLoginBtn')}
+                <button
+                  className="ai-login-btn"
+                  onClick={() => void window.slidesApi.aiGatewayLogin()}
+                >
+                  {t('aiGatewayLoginBtn')}
                 </button>
               )}
               {entry.deckProgress && <DeckProgressCard progress={entry.deckProgress} />}

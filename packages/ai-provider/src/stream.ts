@@ -5,6 +5,7 @@ import {
   HERMES_LLM_BASE_URL,
   gensparkAttributionHeaders,
 } from './providers'
+import { ensureHermesGatewayHealthy } from './hermes-health'
 import type { AiProviderConfig, AiProviderId } from './types'
 import { createStreamWatchdog, type StreamWatchdog } from './watchdog'
 
@@ -702,10 +703,11 @@ export async function streamOpenAiCompatible(
   tools: AgentToolDef[],
   maxTokens: number,
   cb: StreamCallbacks,
+  sessionId?: string,
 ): Promise<void> {
   const wd = createStreamWatchdog(cb.signal)
   return wd.guard(() =>
-    openAiCompatibleTurn(baseUrl, config, system, messages, tools, maxTokens, cb, wd),
+    openAiCompatibleTurn(baseUrl, config, system, messages, tools, maxTokens, cb, wd, sessionId),
   )
 }
 
@@ -718,6 +720,7 @@ async function openAiCompatibleTurn(
   maxTokens: number,
   cb: StreamCallbacks,
   wd: StreamWatchdog,
+  sessionId?: string,
 ): Promise<void> {
   const onBytes = () => {
     wd.touch()
@@ -730,6 +733,9 @@ async function openAiCompatibleTurn(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
       ...gensparkAttributionHeaders(baseUrl),
+      // Hermes gateway session continuity: stable per-document conversation id so
+      // each question continues the same Hermes session instead of starting a new one.
+      ...(sessionId ? { 'X-Hermes-Session-Id': sessionId } : {}),
     },
     body: JSON.stringify({
       model: config.model,
@@ -855,9 +861,14 @@ export async function streamForProvider(
   tools: AgentToolDef[],
   maxTokens: number,
   cb: StreamCallbacks,
+  sessionId?: string,
 ): Promise<void> {
   switch (provider) {
     case 'hermes':
+      // Native Hermes integration: the local Hermes gateway (API server,
+      // OpenAI-compatible) runs the full agent. baseUrl comes from settings,
+      // defaulting to the local gateway when unset.
+      await ensureHermesGatewayHealthy(config.baseUrl || HERMES_LLM_BASE_URL)
       return streamOpenAiCompatible(
         config.baseUrl || HERMES_LLM_BASE_URL,
         config,
@@ -866,6 +877,7 @@ export async function streamForProvider(
         tools,
         maxTokens,
         cb,
+        sessionId,
       )
     case 'genspark':
       // The proxy exposes three protocol-specific endpoints; route by model id prefix: claude uses

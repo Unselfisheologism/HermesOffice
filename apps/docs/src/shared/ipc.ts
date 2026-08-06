@@ -22,7 +22,7 @@ import type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GenSparkAccountStatus,
+  GatewayAccountStatus,
 } from '@hermesoffice/ai-provider'
 
 export type {
@@ -171,10 +171,20 @@ export interface DesktopApi {
     defaultName: string,
     data: ArrayBuffer,
   ): Promise<{ ok: boolean; path?: string; error?: string }>
+  /** fork: record the on-disk file the doc was opened from (external-change detection baseline) */
+  trackDocxFile(path: string): Promise<void>
+  /** fork: notified when the on-disk file changed outside the app (e.g. MCP/agent edit) */
+  onDocxExternalChange(handler: (path: string) => void): () => void
+  /** fork: reveal/open a path in the system */
+  openPath(path: string): Promise<boolean>
   getRecentFiles(): Promise<string[]>
   pickImage(): Promise<PickImageResult | null>
   getAiSettings(): Promise<AiSettings>
   setAiSettings(settings: AiSettings): Promise<void>
+  /** fork: Hermes gateway status probe (no remote gsk account) */
+  aiGatewayStatus(withEmail?: boolean): Promise<GatewayAccountStatus>
+  /** fork: no remote login — re-checks the gateway (fire-and-forget) */
+  aiGatewayLogin(): Promise<void>
   /** system print dialog for the current window */
   print(): Promise<void>
   /** render the document to PDF and ask where to save; size in twips.
@@ -201,10 +211,6 @@ export interface DesktopApi {
   /** start a streaming AI call; deltas arrive via onAiStream with the same requestId */
   aiStream(request: AiStreamRequest): Promise<void>
   aiStreamCancel(requestId: string): Promise<void>
-  /** Genspark account status (gsk login state); withEmail also returns the email (needs a network request, slower) */
-  aiGskStatus(withEmail?: boolean): Promise<GenSparkAccountStatus>
-  /** Open the browser to log in to Genspark (fire-and-forget; aiGskStatus flips to logged-in when done) */
-  aiGskLogin(): Promise<void>
   webSearch(
     query: string,
     maxResults?: number,

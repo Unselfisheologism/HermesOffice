@@ -29,7 +29,7 @@ import { PropertiesDialog } from './PropertiesDialog'
 import { SignatureDialog } from './SignatureDialog'
 import type { SignatureData } from './SignatureDialog'
 import { StampDialog } from './StampDialog'
-import { buildStamps } from './stamps'
+import { DEFAULT_HEADER_FOOTER, DEFAULT_WATERMARK, buildStamps } from './stamps'
 import type { HeaderFooterConfig, WatermarkConfig } from './stamps'
 import { buildSearchIndex, searchInIndex } from './search'
 import type { SearchIndex, SearchMatch } from './search'
@@ -1690,6 +1690,54 @@ export default function App() {
       deletePage(origIdx)
       return true
     },
+    // Fork: expõe o caminho do arquivo p/ o agente ler via engine (MCP)
+    filePath: () => filePath,
+    webSearch: (query, maxResults) => window.pdfApi.aiWebSearch(query, maxResults),
+    captureEditState: snapshot,
+    restoreEditState: (state) => {
+      pushUndo()
+      applySnapshot(state as EditSnapshot)
+    },
+    addNote: (origIdx, text, at) => {
+      pushUndo()
+      const geom = pageGeom(origIdx)
+      // default placement: near the top-left corner in display coords
+      const pos = at ?? viewToPdf(geom, 48, 48)
+      setDrawings((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          input: { kind: 'note', pageIndex: origIdx, color: drawColor, at: pos, contents: text },
+        },
+      ])
+    },
+    setWatermark: (cfg) => {
+      pushUndo()
+      setStampCfg((prev) => ({
+        wm: cfg ? { ...DEFAULT_WATERMARK, ...cfg } : null,
+        hf: prev?.hf ?? null,
+      }))
+    },
+    setHeaderFooter: (cfg) => {
+      pushUndo()
+      setStampCfg((prev) => ({
+        wm: prev?.wm ?? null,
+        hf: cfg ? { ...DEFAULT_HEADER_FOOTER, ...(prev?.hf ?? {}), ...cfg } : null,
+      }))
+    },
+    movePage: (fromPos, toPos) => {
+      if (
+        readOnly ||
+        fromPos < 0 ||
+        toPos < 0 ||
+        fromPos >= visList.length ||
+        toPos >= visList.length
+      )
+        return false
+      movePage(fromPos, toPos)
+      return true
+    },
+    visiblePageCount: () => visList.length,
   }
 
   /** Internal destination of a Link annotation → jump to that page */

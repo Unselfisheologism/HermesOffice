@@ -207,8 +207,19 @@ describe('update check version labels', () => {
     expect(state.version).toBe('0.5.0')
   })
 
-  it('shows tag + ahead-commit form when main is past the newest tag', async () => {
+  it('stays up to date when the installed release base equals the newest tag', async () => {
     tagScript = `${TAG_SHA}\trefs/tags/ho-v0.4.0\n`
+    bootWithUpdate()
+
+    const { initMainUpdater } = await loadMainUpdater()
+    initMainUpdater(() => null)
+    await vi.advanceTimersByTimeAsync(15_000)
+
+    expect(showUpdateWindow).not.toHaveBeenCalled()
+  })
+
+  it('offers the newer tag SemVer even when main has moved past it (release-train)', async () => {
+    tagScript = `${TAG_SHA}\trefs/tags/ho-v0.5.0\n`
     bootWithUpdate()
 
     const { initMainUpdater } = await loadMainUpdater()
@@ -217,7 +228,7 @@ describe('update check version labels', () => {
 
     expect(showUpdateWindow).toHaveBeenCalledTimes(1)
     const state = showUpdateWindow.mock.calls[0][1]
-    expect(state.version).toBe(`0.4.0+${MAIN_SHA.slice(0, 7)}`)
+    expect(state.version).toBe('0.5.0')
   })
 })
 
