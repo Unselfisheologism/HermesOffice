@@ -3,7 +3,9 @@
 
 House style (matches the other templates/docs/*.docx): English content,
 [placeholder] tokens for the AI agents to replace, and a template note that
-agents must delete before delivering. Regenerating this file is idempotent.
+agents must delete before delivering. Regenerating this file is content-
+deterministic (document parts are stable); the zip envelope bytes may vary
+between runs, which is irrelevant to consumers.
 
 Usage: env -u PYTHONPATH ~/.venvs/office/bin/python tools/gen-invoice-template.py
 """
