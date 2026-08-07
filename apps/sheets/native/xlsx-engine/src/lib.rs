@@ -3050,4 +3050,53 @@ mod tests {
             })
         );
     }
+
+    fn attribute_value_from(
+        xml: &str,
+        name: &[u8],
+    ) -> Result<Option<String>, SidecarError> {
+        let mut reader = Reader::from_reader(xml.as_bytes());
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(element) => return attribute_value(&reader, &element, name),
+                Event::Empty(element) => return attribute_value(&reader, &element, name),
+                Event::Eof => return Ok(None),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn attribute_value_decodes_entities() {
+        let value = attribute_value_from(r#"<row r="A&amp;B&amp;&lt;"/>"#, b"r")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, "A&B&<");
+    }
+
+    #[test]
+    fn attribute_value_normalizes_cr_lf_to_space() {
+        let value = attribute_value_from("<row r=\"a\nb\"/>", b"r").unwrap().unwrap();
+        assert_eq!(value, "a b");
+    }
+
+    #[test]
+    fn attribute_value_returns_empty_string_for_empty_value() {
+        let value = attribute_value_from(r#"<row r=""/>"#, b"r").unwrap().unwrap();
+        assert_eq!(value, "");
+    }
+
+    #[test]
+    fn attribute_value_returns_none_for_missing_attribute() {
+        let value = attribute_value_from("<row/>", b"r").unwrap();
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn attribute_value_preserves_utf8_content() {
+        let value = attribute_value_from(r#"<row r="café"/>"#, b"r")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, "café");
+    }
 }
