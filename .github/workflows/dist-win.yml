@@ -1,0 +1,76 @@
+name: build-windows-installer
+
+# Builds the HermesOffice Windows NSIS installer on a GitHub-hosted
+# windows runner and uploads it as a build artifact. Runs manually
+# (workflow_dispatch) so the fork owner controls when builds happen.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: dist-win
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dist-win:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        # SHA-pinned (third-party action); the ref no longer selects the
+        # toolchain, so it is passed explicitly (same pin as the fork's ci.yml).
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch, 2026-07
+        with:
+          toolchain: stable
+
+      - name: Cache cargo (xlsx-sidecar)
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/sheets/native/xlsx-engine
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure Electron binary is present
+        # electron-builder.cjs checks node_modules/electron/dist/LICENSES.chromium.html
+        # at config load; since Electron 42 the postinstall is a lazy
+        # install-electron bin, so force the download before packaging.
+        run: npx install-electron
+
+      - name: Build xlsx sidecar (MSVC host target) and stage for electron-builder
+        # electron-builder.cjs win.extraResources reads the sidecar from the
+        # x86_64-pc-windows-gnu triple path; a native Windows cargo build
+        # produces it under target/release/ (host MSVC target). Stage a copy.
+        run: |
+          npm run native:build -w @hermesoffice/sheets
+          mkdir -p apps/sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release
+          cp apps/sheets/native/xlsx-engine/target/release/xlsx-sidecar.exe apps/sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release/
+          ls -la apps/sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release/
+
+      - name: Build Windows installer
+        # HERMESOFFICE_UPDATE_URL is unset on forks: electron-builder omits the
+        # publish config, so in-app auto-update stays disabled (by design).
+        run: npm run dist:win
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HermesOffice-windows-x64
+          path: apps/shell/release/*
+          if-no-files-found: error
+          retention-days: 14
