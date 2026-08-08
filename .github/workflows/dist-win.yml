@@ -56,10 +56,15 @@ jobs:
         # electron-builder.cjs win.extraResources reads the sidecar from the
         # x86_64-pc-windows-gnu triple path; a native Windows cargo build
         # produces it under target/release/ (host MSVC target). Stage a copy.
+        # shell: bash — windows runners default to PowerShell for `run:` steps.
+        shell: bash
         run: |
           npm run native:build -w @hermesoffice/sheets
           mkdir -p apps/sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release
           cp apps/sheets/native/xlsx-engine/target/release/xlsx-sidecar.exe apps/sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release/
+          # electron-builder exits 0 on a missing extraResources source, so
+          # fail loudly here instead of shipping an installer without Sheets.
+          test -f apps/sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release/xlsx-sidecar.exe && echo "sidecar staged OK" || { echo "sidecar MISSING"; exit 1; }
           ls -la apps/sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release/
 
       - name: Build Windows installer
